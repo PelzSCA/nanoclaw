@@ -5,10 +5,13 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
+export type OnRegisterGroup = (jid: string, group: RegisteredGroup) => void;
+
 export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  registerGroup: OnRegisterGroup;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;
