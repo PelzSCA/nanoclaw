@@ -13,4 +13,3 @@ import './teams.js';
 // telegram
 
 // whatsapp
-import './whatsapp.js';

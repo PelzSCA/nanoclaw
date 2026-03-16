@@ -51,6 +51,22 @@ function stripMentions(text: string): string {
   return text.replace(/<at>.*?<\/at>/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Check whether the bot was @mentioned in the activity.
+ * Teams includes a `mentions` array on the activity's `entities` field
+ * with an entry whose `mentioned.id` matches the bot's app ID.
+ * The mention ID may include a channel prefix (e.g. "28:<appId>"),
+ * so we check whether the ID contains the app ID.
+ */
+function isBotMentioned(activity: Partial<Activity>, botId: string): boolean {
+  if (!activity.entities) return false;
+  return activity.entities.some(
+    (e) =>
+      e.type === 'mention' &&
+      (e as any).mentioned?.id?.includes(botId),
+  );
+}
+
 export class TeamsChannel implements Channel {
   name = 'teams';
 
@@ -190,7 +206,19 @@ export class TeamsChannel implements Channel {
     this.conversationRefs.set(jid, ref);
 
     if (activity.type === 'message' && activity.text) {
-      const text = stripMentions(activity.text);
+      const botMentioned = isBotMentioned(activity, this.appId);
+      let text = stripMentions(activity.text);
+
+      // If the bot was @mentioned in Teams (e.g. @NanoClaw-DEV), prepend
+      // the canonical trigger so the router's TRIGGER_PATTERN matches.
+      // This also handles the case where the message is *only* a mention
+      // (stripped text is empty).
+      if (botMentioned) {
+        text = text
+          ? `@${ASSISTANT_NAME} ${text}`
+          : `@${ASSISTANT_NAME}`;
+      }
+
       if (!text) return;
 
       const timestamp = activity.timestamp
