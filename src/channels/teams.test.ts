@@ -54,11 +54,9 @@ const registeredRoutes: Array<{
 }> = [];
 
 vi.mock('../http-server.js', () => ({
-  registerRoute: vi.fn(
-    (method: string, path: string, handler: Function) => {
-      registeredRoutes.push({ method, path, handler });
-    },
-  ),
+  registerRoute: vi.fn((method: string, path: string, handler: Function) => {
+    registeredRoutes.push({ method, path, handler });
+  }),
 }));
 
 import { TeamsChannel, TeamsChannelOpts } from './teams.js';
@@ -124,7 +122,10 @@ async function simulateIncomingMessage(
   if (!handler) throw new Error('POST /api/messages route not registered');
 
   const req = {
-    headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+    headers: {
+      'content-type': 'application/json',
+      authorization: 'Bearer test',
+    },
   };
   const res = {
     socket: null,

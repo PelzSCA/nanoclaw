@@ -418,7 +418,9 @@ registerChannel('teams', (opts: ChannelOpts) => {
   if (process.env.TEAMS_PORT) {
     logger.warn(
       'TEAMS_PORT is deprecated. The shared HTTP server uses HTTP_SERVER_PORT instead. ' +
-      'Set HTTP_SERVER_PORT=' + process.env.TEAMS_PORT + ' to keep the same port.',
+        'Set HTTP_SERVER_PORT=' +
+        process.env.TEAMS_PORT +
+        ' to keep the same port.',
     );
   }
 

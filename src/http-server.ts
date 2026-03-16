@@ -113,9 +113,7 @@ function corsMiddleware(
  * Create a bearer token auth middleware.
  * Any valid token grants access. Token name is logged for auditing.
  */
-export function bearerAuth(
-  tokens: Record<string, string>,
-): HttpMiddleware {
+export function bearerAuth(tokens: Record<string, string>): HttpMiddleware {
   const tokenIndex = new Map<string, string>();
   for (const [name, value] of Object.entries(tokens)) {
     tokenIndex.set(value, name);
@@ -125,7 +123,9 @@ export function bearerAuth(
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Missing or invalid Authorization header' }));
+      res.end(
+        JSON.stringify({ error: 'Missing or invalid Authorization header' }),
+      );
       return;
     }
 
@@ -180,15 +180,17 @@ export async function startHttpServer(port: number): Promise<Server> {
     // Global health endpoint
     if (method === 'GET' && url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        status: 'ok',
-        routes: routes.map(r => `${r.method} ${r.path}`),
-      }));
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          routes: routes.map((r) => `${r.method} ${r.path}`),
+        }),
+      );
       return;
     }
 
     // Find matching route
-    const route = routes.find(r => r.method === method && r.path === url);
+    const route = routes.find((r) => r.method === method && r.path === url);
     if (!route) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
@@ -215,7 +217,10 @@ export async function startHttpServer(port: number): Promise<Server> {
 
   return new Promise((resolve, reject) => {
     server!.listen(port, () => {
-      logger.info({ port, routeCount: routes.length }, 'Shared HTTP server started');
+      logger.info(
+        { port, routeCount: routes.length },
+        'Shared HTTP server started',
+      );
       resolve(server!);
     });
     server!.on('error', reject);
