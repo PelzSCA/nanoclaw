@@ -1,8 +1,4 @@
-import {
-  registerRoute,
-  bearerAuth,
-  loadWebhookTokens,
-} from './http-server.js';
+import { registerRoute, bearerAuth, loadWebhookTokens } from './http-server.js';
 import {
   normalizeAzureMonitor,
   normalizeJiraSM,
@@ -14,8 +10,7 @@ import { logger } from './logger.js';
 
 export function registerAlertWebhooks(): void {
   const tokens = loadWebhookTokens();
-  const auth =
-    Object.keys(tokens).length > 0 ? [bearerAuth(tokens)] : [];
+  const auth = Object.keys(tokens).length > 0 ? [bearerAuth(tokens)] : [];
 
   registerRoute(
     'POST',
@@ -48,9 +43,7 @@ export function registerAlertWebhooks(): void {
     '/alerts/jira',
     async (_req, res, body) => {
       try {
-        const normalized = normalizeJiraSM(
-          body as Record<string, unknown>,
-        );
+        const normalized = normalizeJiraSM(body as Record<string, unknown>);
         const alert = ingestAlert(normalized);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
@@ -77,9 +70,7 @@ export function registerAlertWebhooks(): void {
     '/alerts/generic',
     async (_req, res, body) => {
       try {
-        const normalized = normalizeGeneric(
-          body as Record<string, unknown>,
-        );
+        const normalized = normalizeGeneric(body as Record<string, unknown>);
         const alert = ingestAlert(normalized);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(

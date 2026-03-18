@@ -72,6 +72,12 @@ COPY agent-runner/ ./
 # Build TypeScript
 RUN npm run build
 
+# Copy utility scripts (atlassian-api wrapper, etc.)
+COPY scripts/ /usr/local/share/nanoclaw-scripts/
+RUN if [ -f /usr/local/share/nanoclaw-scripts/atlassian-api ]; then \
+      ln -s /usr/local/share/nanoclaw-scripts/atlassian-api /usr/local/bin/atlassian-api; \
+    fi
+
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
 
@@ -88,10 +94,19 @@ cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2
 ln -s /app/node_modules /tmp/dist/node_modules
 chmod -R a-w /tmp/dist
 
-# Authenticate Atlassian CLI if credentials are provided
-if [ -n "$ACLI_TOKEN" ] && [ -n "$ACLI_SITE" ] && [ -n "$ACLI_EMAIL" ]; then
-  echo "$ACLI_TOKEN" | acli jira auth login --site "$ACLI_SITE" --email "$ACLI_EMAIL" --token 2>&1 >&2 || true
-  echo "$ACLI_TOKEN" | acli confluence auth login --site "$ACLI_SITE" --email "$ACLI_EMAIL" --token 2>&1 >&2 || true
+# Authenticate Atlassian CLI if credentials are provided.
+# Service account tokens (ATSTT prefix) use Bearer auth via atlassian-api wrapper.
+# Classic API tokens use acli's built-in basic auth login.
+if [ -n "${ACLI_TOKEN:-}" ] && [ -n "${ACLI_SITE:-}" ] && [ -n "${ACLI_EMAIL:-}" ]; then
+  if echo "$ACLI_TOKEN" | grep -q "^ATSTT"; then
+    # Service account token — acli doesn't support these natively.
+    # The atlassian-api wrapper script handles Bearer auth.
+    echo "Atlassian: service account token detected, using atlassian-api wrapper" >&2
+  else
+    # Classic API token — authenticate via acli
+    echo "$ACLI_TOKEN" | acli jira auth login --site "$ACLI_SITE" --email "$ACLI_EMAIL" --token 2>&1 >&2 || true
+    echo "$ACLI_TOKEN" | acli confluence auth login --site "$ACLI_SITE" --email "$ACLI_EMAIL" --token 2>&1 >&2 || true
+  fi
 fi
 
 # Read input and run agent

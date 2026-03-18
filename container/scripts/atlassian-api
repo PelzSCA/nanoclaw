@@ -1,0 +1,121 @@
+#!/bin/bash
+# atlassian-api — Wrapper for Atlassian REST API calls using service account Bearer auth.
+#
+# Uses the api.atlassian.com gateway with Bearer token authentication,
+# which is required for scoped service account tokens (ATSTT prefix).
+#
+# Environment variables (injected by NanoClaw container runner):
+#   ATLASSIAN_BEARER_TOKEN - Service account API token
+#   ATLASSIAN_CLOUD_ID     - Atlassian Cloud ID for the site
+#   ATLASSIAN_SITE         - Site domain (for display only)
+#
+# Usage:
+#   atlassian-api jira GET /rest/api/3/project
+#   atlassian-api jira GET "/rest/api/3/search?jql=project=OPS+AND+status=Open"
+#   atlassian-api confluence GET /wiki/rest/api/space
+#   atlassian-api confluence GET "/wiki/rest/api/content/search?cql=type=page+AND+text~'runbook'"
+#   atlassian-api jira POST /rest/api/3/issue '{"fields":{...}}'
+#
+# Shortcuts:
+#   atlassian-api jira-search "project = OPS AND status = Open"
+#   atlassian-api confluence-search "runbook deployment"
+
+set -euo pipefail
+
+if [ -z "${ATLASSIAN_BEARER_TOKEN:-}" ]; then
+  echo "Error: ATLASSIAN_BEARER_TOKEN not set. Atlassian access not configured for this group." >&2
+  exit 1
+fi
+
+if [ -z "${ATLASSIAN_CLOUD_ID:-}" ]; then
+  echo "Error: ATLASSIAN_CLOUD_ID not set. Add cloudId to atlassian-tokens.json." >&2
+  exit 1
+fi
+
+GATEWAY="https://api.atlassian.com"
+
+case "${1:-}" in
+  jira)
+    METHOD="${2:-GET}"
+    ENDPOINT="${3:-/rest/api/3/myself}"
+    BODY="${4:-}"
+    URL="${GATEWAY}/ex/jira/${ATLASSIAN_CLOUD_ID}${ENDPOINT}"
+    ;;
+  confluence)
+    METHOD="${2:-GET}"
+    ENDPOINT="${3:-/wiki/rest/api/space}"
+    BODY="${4:-}"
+    URL="${GATEWAY}/ex/confluence/${ATLASSIAN_CLOUD_ID}${ENDPOINT}"
+    ;;
+  jira-search)
+    # Shortcut: atlassian-api jira-search "project = OPS AND status = Open"
+    JQL="${2:-}"
+    if [ -z "$JQL" ]; then
+      echo "Usage: atlassian-api jira-search \"<JQL query>\"" >&2
+      exit 1
+    fi
+    ENCODED_JQL=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$JQL'))" 2>/dev/null || echo "$JQL")
+    URL="${GATEWAY}/ex/jira/${ATLASSIAN_CLOUD_ID}/rest/api/3/search?jql=${ENCODED_JQL}&maxResults=${3:-20}"
+    METHOD="GET"
+    BODY=""
+    ;;
+  confluence-search)
+    # Shortcut: atlassian-api confluence-search "runbook deployment"
+    QUERY="${2:-}"
+    if [ -z "$QUERY" ]; then
+      echo "Usage: atlassian-api confluence-search \"<search text>\"" >&2
+      exit 1
+    fi
+    ENCODED_CQL=$(python3 -c "import urllib.parse; print(urllib.parse.quote('type=page AND text~\"$QUERY\"'))" 2>/dev/null || echo "type=page AND text~\"$QUERY\"")
+    URL="${GATEWAY}/ex/confluence/${ATLASSIAN_CLOUD_ID}/wiki/rest/api/content/search?cql=${ENCODED_CQL}&limit=${3:-10}"
+    METHOD="GET"
+    BODY=""
+    ;;
+  --help|-h|"")
+    cat <<'HELP'
+atlassian-api — Atlassian REST API wrapper for service account auth
+
+Usage:
+  atlassian-api jira GET <endpoint>              Jira REST API call
+  atlassian-api confluence GET <endpoint>         Confluence REST API call
+  atlassian-api jira POST <endpoint> '<json>'     Jira POST with body
+  atlassian-api jira-search "<JQL>"               Search Jira issues
+  atlassian-api confluence-search "<text>"         Search Confluence pages
+
+Examples:
+  atlassian-api jira GET /rest/api/3/project
+  atlassian-api jira-search "project = OPS AND status = Open AND priority = High"
+  atlassian-api confluence-search "runbook CPU high"
+  atlassian-api confluence GET "/wiki/rest/api/content/12345?expand=body.storage"
+HELP
+    exit 0
+    ;;
+  *)
+    echo "Unknown command: $1. Use --help for usage." >&2
+    exit 1
+    ;;
+esac
+
+CURL_ARGS=(
+  -s
+  -H "Authorization: Bearer ${ATLASSIAN_BEARER_TOKEN}"
+  -H "Accept: application/json"
+)
+
+if [ "$METHOD" != "GET" ] && [ -n "$BODY" ]; then
+  CURL_ARGS+=(-X "$METHOD" -H "Content-Type: application/json" -d "$BODY")
+elif [ "$METHOD" != "GET" ]; then
+  CURL_ARGS+=(-X "$METHOD")
+fi
+
+CURL_ARGS+=("$URL")
+
+RESPONSE=$(curl "${CURL_ARGS[@]}" 2>&1)
+HTTP_CODE=$(echo "$RESPONSE" | tail -c 4 2>/dev/null || echo "")
+
+# Pretty-print JSON if python3 is available, otherwise raw output
+if command -v python3 &>/dev/null; then
+  echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
+else
+  echo "$RESPONSE"
+fi

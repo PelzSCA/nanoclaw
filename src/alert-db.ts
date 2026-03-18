@@ -117,9 +117,7 @@ export function getAlertsByFingerprint(
 export function getAlertsByContext(contextId: string): NormalizedAlert[] {
   const db = getDb();
   const rows = db
-    .prepare(
-      'SELECT * FROM alerts WHERE context_id = ? ORDER BY received_at',
-    )
+    .prepare('SELECT * FROM alerts WHERE context_id = ? ORDER BY received_at')
     .all(contextId) as Record<string, unknown>[];
   return rows.map(rowToAlert);
 }
@@ -186,10 +184,7 @@ export function indexAlertFts(alert: NormalizedAlert): void {
   }
 }
 
-export function searchAlertsFts(
-  query: string,
-  limit = 20,
-): NormalizedAlert[] {
+export function searchAlertsFts(query: string, limit = 20): NormalizedAlert[] {
   const db = getDb();
   try {
     const rows = db
@@ -385,7 +380,9 @@ export function getAlertFrequency(fingerprint: string): AlertFrequency {
   const db = getDb();
   const now = new Date();
   const since24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-  const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const since7d = new Date(
+    now.getTime() - 7 * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
   const count24h = (
     db
@@ -434,7 +431,9 @@ export function getAlertFrequency(fingerprint: string): AlertFrequency {
 export function isAlertSuppressed(fingerprint: string): boolean {
   const db = getDb();
   const row = db
-    .prepare('SELECT suppressed_until FROM alert_suppression_rules WHERE fingerprint = ?')
+    .prepare(
+      'SELECT suppressed_until FROM alert_suppression_rules WHERE fingerprint = ?',
+    )
     .get(fingerprint) as { suppressed_until: string | null } | undefined;
 
   if (!row) return false;
@@ -475,9 +474,7 @@ export function getCorrelatedAlerts(
   limit = 20,
 ): NormalizedAlert[] {
   const db = getDb();
-  const since = new Date(
-    Date.now() - windowMinutes * 60 * 1000,
-  ).toISOString();
+  const since = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
 
   // Score alerts by shared attributes. Using a CASE-based scoring query.
   const rows = db
@@ -554,8 +551,7 @@ export function upsertAlertKnowledge(
       (existing.typicalPriority * existing.investigationCount + priority) /
         newCount,
     );
-    const knowledge =
-      existing.knowledge + `\n\n---\n[${now}] ${summary}`;
+    const knowledge = existing.knowledge + `\n\n---\n[${now}] ${summary}`;
 
     db.prepare(
       `UPDATE alert_knowledge SET
@@ -577,9 +573,7 @@ export function upsertAlertKnowledge(
 
 export function purgeOldAlerts(retentionDays = 90): number {
   const db = getDb();
-  const cutoff = new Date(
-    Date.now() - retentionDays * 86400000,
-  ).toISOString();
+  const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
 
   const deleted = db
     .prepare(
@@ -589,9 +583,7 @@ export function purgeOldAlerts(retentionDays = 90): number {
 
   // Clean up orphaned FTS entries
   try {
-    db.exec(
-      'DELETE FROM alert_fts WHERE id NOT IN (SELECT id FROM alerts)',
-    );
+    db.exec('DELETE FROM alert_fts WHERE id NOT IN (SELECT id FROM alerts)');
   } catch {
     /* FTS cleanup failed — non-critical */
   }

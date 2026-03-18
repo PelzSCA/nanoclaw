@@ -49,13 +49,15 @@ export function ingestAlert(
   const alert: NormalizedAlert = {
     id: randomUUID(),
     receivedAt: now,
-    fingerprint: computeFingerprint(partial as {
-      source: string;
-      type: string;
-      resource: string;
-      host?: string;
-      location?: string;
-    }),
+    fingerprint: computeFingerprint(
+      partial as {
+        source: string;
+        type: string;
+        resource: string;
+        host?: string;
+        location?: string;
+      },
+    ),
     investigationStatus: 'pending',
     tags: partial.tags || {},
     metadata: partial.metadata || {},
@@ -92,9 +94,7 @@ export function ingestAlert(
   // Check frequency-based auto-suppression
   const freq = getAlertFrequency(alert.fingerprint);
   if (freq.count24h >= ALERT_NOISY_THRESHOLD_24H) {
-    const until = new Date(
-      Date.now() + 24 * 60 * 60 * 1000,
-    ).toISOString();
+    const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     suppressAlert(
       alert.fingerprint,
       until,

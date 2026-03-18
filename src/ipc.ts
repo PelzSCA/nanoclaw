@@ -8,10 +8,7 @@ import { randomUUID } from 'crypto';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import {
-  createSubscription,
-  deleteSubscription,
-} from './alert-db.js';
+import { createSubscription, deleteSubscription } from './alert-db.js';
 import { handleInvestigationComplete } from './alert-processor.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
@@ -541,9 +538,7 @@ export async function processTaskIpc(
         break;
       }
       const until =
-        hours > 0
-          ? new Date(Date.now() + hours * 3600000).toISOString()
-          : null;
+        hours > 0 ? new Date(Date.now() + hours * 3600000).toISOString() : null;
       suppressAlert(fp, until, reason, sourceGroup);
       logger.info(
         { fingerprint: fp, hours, sourceGroup },

@@ -288,6 +288,7 @@ export interface AtlassianCredentials {
   site: string;
   email: string;
   token: string;
+  cloudId?: string;
 }
 
 async function loadAtlassianCredentials(
@@ -336,9 +337,16 @@ function buildContainerArgs(
     args.push('-e', `GH_TOKEN=${creds.githubToken}`);
   }
   if (creds?.atlassianCreds) {
+    // Legacy ACLI_ vars for backward compatibility with classic API tokens
     args.push('-e', `ACLI_SITE=${creds.atlassianCreds.site}`);
     args.push('-e', `ACLI_EMAIL=${creds.atlassianCreds.email}`);
     args.push('-e', `ACLI_TOKEN=${creds.atlassianCreds.token}`);
+    // Bearer-based vars for service account tokens (ATSTT prefix) and the atlassian-api wrapper
+    args.push('-e', `ATLASSIAN_SITE=${creds.atlassianCreds.site}`);
+    args.push('-e', `ATLASSIAN_BEARER_TOKEN=${creds.atlassianCreds.token}`);
+    if (creds.atlassianCreds.cloudId) {
+      args.push('-e', `ATLASSIAN_CLOUD_ID=${creds.atlassianCreds.cloudId}`);
+    }
   }
 
   // Runtime-specific args for host gateway resolution

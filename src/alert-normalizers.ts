@@ -11,7 +11,8 @@ export function normalizeAzureMonitor(
   if (!data) throw new Error('Missing data field in Azure Monitor payload');
 
   const essentials = data.essentials as Record<string, unknown> | undefined;
-  if (!essentials) throw new Error('Missing data.essentials in Azure Monitor payload');
+  if (!essentials)
+    throw new Error('Missing data.essentials in Azure Monitor payload');
 
   // Map Azure severity: Sev0→1, Sev1→2, Sev2→3, Sev3→4, Sev4→5
   const azureSev = String(essentials.severity || 'Sev4');
@@ -58,12 +59,18 @@ export function normalizeAzureMonitor(
 
   if (alertContext) {
     // Metric alerts
-    const condition2 = alertContext.condition as Record<string, unknown> | undefined;
+    const condition2 = alertContext.condition as
+      | Record<string, unknown>
+      | undefined;
     if (condition2?.allOf) {
       const criteria = (condition2.allOf as Record<string, unknown>[])[0];
       if (criteria) {
-        metricValue = criteria.metricValue != null ? String(criteria.metricValue) : undefined;
-        threshold = criteria.threshold != null ? String(criteria.threshold) : undefined;
+        metricValue =
+          criteria.metricValue != null
+            ? String(criteria.metricValue)
+            : undefined;
+        threshold =
+          criteria.threshold != null ? String(criteria.threshold) : undefined;
       }
     }
     description = (alertContext.conditionType as string) || undefined;
@@ -136,7 +143,9 @@ export function normalizeJiraSM(
   // Also handle P1-P5 naming
   const severity =
     prioMap[priorityName] ??
-    (/^P?(\d)$/i.test(priorityName) ? parseInt(priorityName.replace(/^P/i, '')) : 3);
+    (/^P?(\d)$/i.test(priorityName)
+      ? parseInt(priorityName.replace(/^P/i, ''))
+      : 3);
 
   // Map webhook event to status
   let status = 'firing';
@@ -159,10 +168,9 @@ export function normalizeJiraSM(
   const tags: Record<string, string> = {};
   const labels = fields.labels as string[] | undefined;
   if (labels?.length) tags.labels = labels.join(',');
-  const components = fields.components as
-    | Array<{ name: string }>
-    | undefined;
-  if (components?.length) tags.components = components.map((c) => c.name).join(',');
+  const components = fields.components as Array<{ name: string }> | undefined;
+  if (components?.length)
+    tags.components = components.map((c) => c.name).join(',');
   const project = fields.project as Record<string, unknown> | undefined;
   if (project?.key) tags.project = String(project.key);
 
@@ -200,8 +208,7 @@ export function normalizeGeneric(
   if (!payload.summary) throw new Error('Missing required field: summary');
 
   const severity = Number(payload.severity ?? 3);
-  if (severity < 1 || severity > 5)
-    throw new Error('severity must be 1-5');
+  if (severity < 1 || severity > 5) throw new Error('severity must be 1-5');
 
   return {
     externalId: String(payload.externalId || ''),

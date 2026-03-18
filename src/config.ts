@@ -6,7 +6,7 @@ import { readEnvFile } from './env.js';
 // Read config values from .env (falls back to process.env).
 // Secrets (API keys, tokens) are NOT read here — they are loaded only
 // by the credential proxy (credential-proxy.ts), never exposed to containers.
-const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER']);
+const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER', 'HTTP_SERVER_PORT']);
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
@@ -71,7 +71,7 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
   10,
 );
 export const HTTP_SERVER_PORT = parseInt(
-  process.env.HTTP_SERVER_PORT || '3080',
+  process.env.HTTP_SERVER_PORT || envConfig.HTTP_SERVER_PORT || '3080',
   10,
 );
 export const WEBHOOK_TOKENS_PATH = path.join(

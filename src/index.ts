@@ -210,6 +210,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+  // Teams typing expires after ~3s — re-send periodically while agent is working
+  const typingInterval = setInterval(() => {
+    channel.setTyping?.(chatJid, true)?.catch(() => {});
+  }, 2500);
+
   let hadError = false;
   let outputSentToUser = false;
 
@@ -266,6 +271,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     return true;
   } finally {
+    clearInterval(typingInterval);
     await channel.setTyping?.(chatJid, false).catch(() => {});
     if (idleTimer) clearTimeout(idleTimer);
   }
@@ -608,7 +614,10 @@ async function main(): Promise<void> {
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
-        logger.warn({ jid }, 'No channel owns JID, cannot send alert notification');
+        logger.warn(
+          { jid },
+          'No channel owns JID, cannot send alert notification',
+        );
         return;
       }
       const text = formatOutbound(rawText);

@@ -102,10 +102,14 @@ async function processAlertBatch(
   );
 
   // Enqueue to the main group's container
-  deps.queue.enqueueTask(
-    mainGroup.jid,
-    `alert-${contextId}`,
-    () => runAlertInvestigation(mainGroup.group, prompt, mainGroup.jid, contextId, deps),
+  deps.queue.enqueueTask(mainGroup.jid, `alert-${contextId}`, () =>
+    runAlertInvestigation(
+      mainGroup.group,
+      prompt,
+      mainGroup.jid,
+      contextId,
+      deps,
+    ),
   );
 }
 
@@ -285,7 +289,10 @@ ${k.knowledge.slice(-2000)}`,
 
 2. **Investigate root cause**: Use available tools:
    - \`az\` CLI for Azure resource status, metrics, logs, activity log
-   - \`acli\` for Jira/Confluence — search for known issues, runbooks, past incidents
+   - \`atlassian-api\` for Jira/Confluence — search for known issues, runbooks, past incidents
+     - \`atlassian-api jira-search "project = OPS AND status = Open"\`
+     - \`atlassian-api confluence-search "runbook error message"\`
+     - \`atlassian-api --help\` for full usage
    - \`WebSearch\` for error messages, known issues, CVEs
    - \`WebFetch\` to check status pages or documentation
 
@@ -436,17 +443,15 @@ async function notifySubscribedGroups(
     alerts[0],
   );
   const priority = primaryAlert.assessedPriority || primaryAlert.severity;
-  const priorityLabel = ['', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'][
-    priority
-  ] || 'UNKNOWN';
+  const priorityLabel =
+    ['', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'][priority] || 'UNKNOWN';
 
   const alertList = alerts
     .filter((a) => a.severity <= 4)
     .map((a) => `- ${a.type} — ${a.resource} (sev ${a.severity})`)
     .join('\n');
 
-  const summary =
-    primaryAlert.investigationSummary || primaryAlert.summary;
+  const summary = primaryAlert.investigationSummary || primaryAlert.summary;
 
   const notification = `Alert Investigation [P${priority} ${priorityLabel}]
 
