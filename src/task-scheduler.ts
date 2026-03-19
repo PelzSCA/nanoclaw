@@ -7,6 +7,7 @@ import {
   ContainerOutput,
   runContainerAgent,
   writeTasksSnapshot,
+  writeToolDocsSnapshot,
 } from './container-runner.js';
 import {
   getAllTasks,
@@ -145,6 +146,8 @@ async function runTask(
       next_run: t.next_run,
     })),
   );
+
+  writeToolDocsSnapshot(task.group_folder, group.containerConfig);
 
   let result: string | null = null;
   let error: string | null = null;

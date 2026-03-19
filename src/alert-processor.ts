@@ -17,6 +17,7 @@ import {
   runContainerAgent,
   writeTasksSnapshot,
   writeSubscriptionsSnapshot,
+  writeToolDocsSnapshot,
 } from './container-runner.js';
 import { getAllTasks, setSession } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -139,6 +140,8 @@ async function runAlertInvestigation(
       next_run: t.next_run,
     })),
   );
+
+  writeToolDocsSnapshot(group.folder, group.containerConfig);
 
   const subs = getAllSubscriptions();
   writeSubscriptionsSnapshot(

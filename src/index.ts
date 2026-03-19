@@ -22,6 +22,7 @@ import {
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
+  writeToolDocsSnapshot,
   initSecrets,
 } from './container-runner.js';
 import {
@@ -212,9 +213,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   // Teams typing expires after ~3s — re-send periodically while agent is working.
   // Stop when agent produces output (goes idle-waiting), restart on new input.
-  let typingInterval: ReturnType<typeof setInterval> | null = setInterval(() => {
-    channel.setTyping?.(chatJid, true)?.catch(() => {});
-  }, 2500);
+  let typingInterval: ReturnType<typeof setInterval> | null = setInterval(
+    () => {
+      channel.setTyping?.(chatJid, true)?.catch(() => {});
+    },
+    2500,
+  );
 
   const stopTyping = () => {
     if (typingInterval) {
@@ -311,6 +315,9 @@ async function runAgent(
       next_run: t.next_run,
     })),
   );
+
+  // Write tool documentation for this group's enabled tools
+  writeToolDocsSnapshot(group.folder, group.containerConfig);
 
   // Update available groups snapshot (main group only can see all groups)
   const availableGroups = getAvailableGroups();

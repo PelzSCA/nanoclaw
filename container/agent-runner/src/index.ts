@@ -366,11 +366,20 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
+  // Build system prompt appendix from global CLAUDE.md and tool documentation
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
+  let systemPromptAppend = '';
   if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+    systemPromptAppend = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  }
+
+  // Inject tool documentation assembled by host based on group's containerConfig
+  const toolDocsPath = '/workspace/ipc/tool-docs.md';
+  if (fs.existsSync(toolDocsPath)) {
+    const toolDocs = fs.readFileSync(toolDocsPath, 'utf-8');
+    systemPromptAppend = systemPromptAppend
+      ? systemPromptAppend + '\n\n---\n\n' + toolDocs
+      : toolDocs;
   }
 
   // Discover additional directories mounted at /workspace/extra/*
@@ -396,8 +405,8 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+      systemPrompt: systemPromptAppend
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend }
         : undefined,
       allowedTools: [
         'Bash',

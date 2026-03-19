@@ -35,7 +35,7 @@ import {
   SecretProvider,
 } from './secret-provider.js';
 import { readEnvFile } from './env.js';
-import { RegisteredGroup } from './types.js';
+import { ContainerConfig, RegisteredGroup } from './types.js';
 
 let secretProvider: SecretProvider | null = null;
 
@@ -879,4 +879,48 @@ export function writeSubscriptionsSnapshot(
 
   const subsFile = path.join(groupIpcDir, 'alert_subscriptions.json');
   fs.writeFileSync(subsFile, JSON.stringify(filtered, null, 2));
+}
+
+/**
+ * Assemble tool documentation based on the group's containerConfig flags.
+ * Reads snippet files from container/tool-docs/ and writes a combined
+ * tool-docs.md into the group's IPC directory for the agent-runner to inject.
+ */
+const TOOL_DOCS_DIR = path.join(process.cwd(), 'container', 'tool-docs');
+const TOOL_DOC_FILES: Record<string, string> = {
+  githubAccess: 'github.md',
+  azureAccess: 'azure.md',
+  atlassianAccess: 'atlassian.md',
+};
+
+export function writeToolDocsSnapshot(
+  groupFolder: string,
+  containerConfig?: ContainerConfig,
+): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const sections: string[] = [];
+  for (const [flag, filename] of Object.entries(TOOL_DOC_FILES)) {
+    if (containerConfig?.[flag as keyof ContainerConfig]) {
+      const docPath = path.join(TOOL_DOCS_DIR, filename);
+      if (fs.existsSync(docPath)) {
+        sections.push(fs.readFileSync(docPath, 'utf-8').trim());
+      }
+    }
+  }
+
+  const toolDocsFile = path.join(groupIpcDir, 'tool-docs.md');
+  if (sections.length > 0) {
+    fs.writeFileSync(
+      toolDocsFile,
+      '# Available Tools\n\n' + sections.join('\n\n---\n\n') + '\n',
+    );
+  } else {
+    try {
+      fs.unlinkSync(toolDocsFile);
+    } catch {
+      /* no file to remove */
+    }
+  }
 }
