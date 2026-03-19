@@ -547,6 +547,72 @@ export async function processTaskIpc(
       break;
     }
 
+    case 'request_tool_access': {
+      // Non-main groups request tool access — forward to main group as a message
+      if (isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Main group sent request_tool_access — ignored',
+        );
+        break;
+      }
+
+      const tool = data.tool as string;
+      const reason = data.reason as string;
+      const requestChatJid = data.chatJid as string;
+      if (!tool || !reason) {
+        logger.warn({ data }, 'Invalid request_tool_access — missing fields');
+        break;
+      }
+
+      // Find the main group's JID
+      const mainEntry = Object.entries(registeredGroups).find(
+        ([, g]) => g.isMain,
+      );
+      if (!mainEntry) {
+        logger.warn('No main group registered — cannot forward tool request');
+        break;
+      }
+      const [mainJid] = mainEntry;
+
+      // Look up requesting group name
+      const requestingGroup = registeredGroups[requestChatJid];
+      const groupName = requestingGroup?.name || sourceGroup;
+
+      // Query recent participants from messages table
+      const { getRecentParticipants } = await import('./db.js');
+      const participants = getRecentParticipants(requestChatJid);
+
+      const toolNames: Record<string, string> = {
+        azure: 'Azure CLI (`azureAccess`)',
+        github: 'GitHub CLI (`githubAccess`)',
+        atlassian: 'Atlassian API (`atlassianAccess`)',
+      };
+
+      const message = [
+        `**Tool Access Request**`,
+        ``,
+        `**Group:** ${groupName}`,
+        `**Tool:** ${toolNames[tool] || tool}`,
+        `**Reason:** ${reason}`,
+        participants.length > 0
+          ? `**Members:** ${participants.join(', ')}`
+          : `**Members:** _(no recent activity)_`,
+        ``,
+        `To approve, re-register the group with the flag enabled:`,
+        '```',
+        `register_group with jid="${requestChatJid}" and containerConfig: { "${tool}Access": true }`,
+        '```',
+      ].join('\n');
+
+      await deps.sendMessage(mainJid, message);
+      logger.info(
+        { tool, groupName, sourceGroup, mainJid },
+        'Tool access request forwarded to main group',
+      );
+      break;
+    }
+
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }

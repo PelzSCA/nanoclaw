@@ -489,6 +489,42 @@ server.tool(
   },
 );
 
+// --- Tool access request (non-main groups) ---
+
+server.tool(
+  'request_tool_access',
+  'Request access to a CLI tool (e.g. az, gh, atlassian-api) for this group. ' +
+  'Sends a structured request to the admin channel for approval. ' +
+  'Only available to non-main groups — main already has direct access to configure tools.',
+  {
+    tool: z.enum(['azure', 'github', 'atlassian']).describe(
+      'The tool to request access to: "azure" (az CLI), "github" (gh CLI), or "atlassian" (atlassian-api)',
+    ),
+    reason: z.string().describe('Why this group needs access to the tool'),
+  },
+  async (args) => {
+    if (isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Main group already has admin access. Use register_group to enable tools for other groups.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'request_tool_access',
+      tool: args.tool,
+      reason: args.reason,
+      chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+    writeIpcFile(TASKS_DIR, data);
+    return {
+      content: [{ type: 'text' as const, text: `Access request for "${args.tool}" sent to admin channel for approval.` }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

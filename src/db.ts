@@ -746,6 +746,30 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   return result;
 }
 
+export function getRecentParticipants(
+  chatJid: string,
+  limit = 10,
+): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT sender_name FROM messages
+       WHERE chat_jid = ? AND is_from_me = 0 AND sender_name IS NOT NULL AND sender_name != ''
+       ORDER BY timestamp DESC LIMIT ?`,
+    )
+    .all(chatJid, limit * 3) as Array<{ sender_name: string }>;
+  // Deduplicate (DISTINCT + ORDER BY can be unreliable across SQLite versions)
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const row of rows) {
+    if (!seen.has(row.sender_name)) {
+      seen.add(row.sender_name);
+      names.push(row.sender_name);
+      if (names.length >= limit) break;
+    }
+  }
+  return names;
+}
+
 // --- JSON migration ---
 
 function migrateJsonState(): void {
