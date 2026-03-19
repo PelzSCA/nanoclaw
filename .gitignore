@@ -12,6 +12,9 @@ logs/
 # Groups - operational folders are per-installation, templates are tracked
 groups/*
 !groups/_templates/
+!groups/global/
+groups/global/*
+!groups/global/CLAUDE.md
 
 # Secrets
 *.keys.json

@@ -19,7 +19,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/_templates/main/CLAUDE.md` | Template for main group CLAUDE.md (tracked in git) |
-| `groups/_templates/global/CLAUDE.md` | Template for global CLAUDE.md (tracked in git) |
+| `groups/global/CLAUDE.md` | Global shared context, injected into all non-main groups (tracked in git) |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated, gitignored) |
 | `container/tool-docs/*.md` | CLI tool documentation snippets, injected per-group based on `containerConfig` flags |
 | `container/skills/agent-browser.md` | Browser automation tool (available to all agents via Bash) |
@@ -63,9 +63,9 @@ systemctl --user restart nanoclaw
 Operational group folders (`groups/main/`, `groups/global/`, etc.) are gitignored — they contain per-installation state and memory. Tracked templates live in `groups/_templates/`:
 
 - `groups/_templates/main/CLAUDE.md` — template for the main (admin) group
-- `groups/_templates/global/CLAUDE.md` — template for global shared context (injected into all non-main groups)
+- `groups/global/CLAUDE.md` — universal shared context (tracked directly, not templated)
 
-Templates use `{{PLACEHOLDER}}` syntax for instance-specific values:
+The main template uses `{{PLACEHOLDER}}` syntax for instance-specific values:
 
 | Placeholder | Replace with |
 |-------------|-------------|
