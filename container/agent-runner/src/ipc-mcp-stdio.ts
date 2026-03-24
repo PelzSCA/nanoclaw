@@ -19,7 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
-const canScheduleTasks = process.env.NANOCLAW_CAN_SCHEDULE_TASKS === '1';
+const scheduledTasksAccess = process.env.NANOCLAW_SCHEDULED_TASKS_ACCESS === '1';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -63,8 +63,8 @@ server.tool(
   },
 );
 
-// Task scheduling tools - only available if canScheduleTasks permission is granted or is main
-if (isMain || canScheduleTasks) {
+// Task scheduling tools - only available if scheduledTasksAccess permission is granted or is main
+if (isMain || scheduledTasksAccess) {
 server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
@@ -204,7 +204,7 @@ server.tool(
     return { content: [{ type: 'text' as const, text: `Task ${args.task_id} update requested.` }] };
   },
 );
-} // end canScheduleTasks conditional
+} // end scheduledTasksAccess conditional
 
 server.tool(
   'list_tasks',
@@ -303,8 +303,11 @@ server.tool(
 
 server.tool(
   'clear_session',
-  'Clear the conversation session for this group. The next agent invocation will start with a fresh context (no prior conversation history). Use when the conversation context is stale, confused, or the user asks to start fresh. The current invocation is not affected — the reset takes effect on the NEXT message.',
+  `Clear the conversation session for this group. The next agent invocation will start with a fresh context (no prior conversation history). Use when the conversation context is stale, confused, or the user asks to start fresh. The current invocation is not affected — the reset takes effect on the NEXT message.
+
+IMPORTANT: Before clearing, write a brief summary of what was discussed so it can be referenced later if the session needs to be recovered.`,
   {
+    summary: z.string().optional().describe('Brief summary of the session being cleared (e.g., "Investigated Azure livereadintegration storage, attempted Confluence page access")'),
     target_folder: z.string().optional().describe('Group folder to clear (main only, defaults to own group)'),
   },
   async (args) => {
@@ -315,6 +318,7 @@ server.tool(
     const data = {
       type: 'clear_session',
       targetFolder,
+      summary: args.summary,
       groupFolder,
       isMain,
       timestamp: new Date().toISOString(),
@@ -323,7 +327,7 @@ server.tool(
     return {
       content: [{
         type: 'text' as const,
-        text: `Session cleared for ${targetFolder}. The next message will start a fresh conversation with no prior history.`,
+        text: `Session cleared for ${targetFolder}. The next message will start a fresh conversation with no prior history.${args.summary ? ` Summary saved: "${args.summary}"` : ''}`,
       }],
     };
   },
@@ -331,9 +335,9 @@ server.tool(
 
 server.tool(
   'recover_session',
-  'Restore a previous session ID for a group. Use to roll back to an earlier conversation state. Main group can recover any group; other groups can only recover their own.',
+  'Restore a previous session ID for a group. Use to roll back to an earlier conversation state. Use list_sessions first to see available sessions. Main group can recover any group; other groups can only recover their own.',
   {
-    session_id: z.string().describe('The session ID to restore'),
+    session_id: z.string().describe('The session ID to restore (get this from list_sessions)'),
     target_folder: z.string().optional().describe('Group folder to recover (main only, defaults to own group)'),
   },
   async (args) => {
@@ -360,18 +364,75 @@ server.tool(
 );
 
 server.tool(
+  'list_sessions',
+  'List session history for this group (or another group if main). Shows previous sessions with their IDs, dates, status, and summaries. Use this to find a session ID for recover_session.',
+  {
+    target_folder: z.string().optional().describe('Group folder to list (main only, defaults to own group)'),
+  },
+  async (args) => {
+    const targetFolder = args.target_folder || groupFolder;
+    if (targetFolder !== groupFolder && !isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can list other groups\' sessions.' }] };
+    }
+
+    const historyFile = path.join(IPC_DIR, 'session_history.json');
+    try {
+      if (!fs.existsSync(historyFile)) {
+        return { content: [{ type: 'text' as const, text: 'No session history available.' }] };
+      }
+
+      const allHistory = JSON.parse(fs.readFileSync(historyFile, 'utf-8')) as Array<{
+        id: number;
+        group_folder: string;
+        session_id: string;
+        started_at: string;
+        ended_at: string | null;
+        status: string;
+        summary: string | null;
+        message_count: number;
+      }>;
+
+      const history = allHistory.filter(h => h.group_folder === targetFolder);
+
+      if (history.length === 0) {
+        return { content: [{ type: 'text' as const, text: `No session history for ${targetFolder}.` }] };
+      }
+
+      const formatted = history.map(h => {
+        const started = h.started_at.replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+        const ended = h.ended_at ? h.ended_at.replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : 'active';
+        const summary = h.summary ? ` — ${h.summary}` : '';
+        const msgs = h.message_count > 0 ? ` (${h.message_count} msgs)` : '';
+        return `- [${h.status}] ${h.session_id}\n  Started: ${started} | Ended: ${ended}${msgs}${summary}`;
+      }).join('\n');
+
+      return { content: [{ type: 'text' as const, text: `Session history for ${targetFolder}:\n\n${formatted}` }] };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Error reading session history: ${err instanceof Error ? err.message : String(err)}` }],
+      };
+    }
+  },
+);
+
+server.tool(
   'register_group',
   `Register a new chat/group so the agent can respond to messages there. Main group only.
 
 Use available_groups.json to find the JID for a group. The folder name must be channel-prefixed: "{channel}_{group-name}" (e.g., "whatsapp_family-chat", "telegram_dev-team", "discord_general"). Use lowercase with hyphens for the group name part.
 
-Permissions: By default, non-main groups cannot schedule tasks. Set can_schedule_tasks=true to allow them to create recurring tasks.`,
+Permissions: By default, non-main groups have no tool access. Use containerConfig to enable capabilities like githubAccess, azureAccess, atlassianAccess, or scheduledTasksAccess.`,
   {
     jid: z.string().describe('The chat JID (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")'),
     name: z.string().describe('Display name for the group'),
     folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
-    can_schedule_tasks: z.boolean().optional().describe('Allow this group to create scheduled tasks. Default: false for non-main groups.'),
+    containerConfig: z.object({
+      githubAccess: z.boolean().optional().describe('Enable GitHub CLI access'),
+      azureAccess: z.boolean().optional().describe('Enable Azure CLI access'),
+      atlassianAccess: z.boolean().optional().describe('Enable Atlassian API access'),
+      scheduledTasksAccess: z.boolean().optional().describe('Allow this group to create scheduled tasks'),
+    }).optional().describe('Tool access and resource configuration for this group'),
   },
   async (args) => {
     if (!isMain) {
@@ -387,7 +448,7 @@ Permissions: By default, non-main groups cannot schedule tasks. Set can_schedule
       name: args.name,
       folder: args.folder,
       trigger: args.trigger,
-      canScheduleTasks: args.can_schedule_tasks,
+      containerConfig: args.containerConfig,
       timestamp: new Date().toISOString(),
     };
 
@@ -559,12 +620,12 @@ server.tool(
 
 server.tool(
   'request_tool_access',
-  'Request access to a CLI tool or capability (e.g. az, gh, atlassian-api, scheduled_tasks) for this group. ' +
+  'Request access to a CLI tool or capability (e.g. az, gh, atlassian-api, scheduled tasks) for this group. ' +
   'Sends a structured request to the admin channel for approval. ' +
   'Only available to non-main groups — main already has direct access to configure tools.',
   {
     tool: z.enum(['azure', 'github', 'atlassian', 'scheduled_tasks']).describe(
-      'The tool or capability to request: "azure" (az CLI), "github" (gh CLI), "atlassian" (atlassian-api), or "scheduled_tasks" (task scheduling)',
+      'The tool or capability to request: "azure" (az CLI), "github" (gh CLI), "atlassian" (atlassian-api), or "scheduled_tasks" (scheduledTasksAccess)',
     ),
     reason: z.string().describe('Why this group needs access to this tool or capability'),
   },

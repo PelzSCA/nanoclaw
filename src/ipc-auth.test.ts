@@ -62,6 +62,10 @@ beforeEach(() => {
     syncGroups: async () => {},
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
+    clearSession: () => {},
+    getSession: () => undefined,
+    setSession: () => {},
+    getSessionHistory: () => [],
   };
 });
 

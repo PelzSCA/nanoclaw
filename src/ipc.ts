@@ -26,9 +26,18 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
-  clearSession: (groupFolder: string) => void;
+  clearSession: (groupFolder: string, summary?: string) => void;
   getSession: (groupFolder: string) => string | undefined;
   setSession: (groupFolder: string, sessionId: string) => void;
+  getSessionHistory: (groupFolder: string, limit?: number) => Array<{
+    id: number;
+    session_id: string;
+    started_at: string;
+    ended_at: string | null;
+    status: string;
+    summary: string | null;
+    message_count: number;
+  }>;
 }
 
 let ipcWatcherRunning = false;
@@ -249,11 +258,11 @@ export async function processTaskIpc(
 
         const targetFolder = targetGroupEntry.folder;
 
-        // Authorization: non-main groups need canScheduleTasks permission
-        if (!isMain && !targetGroupEntry.containerConfig?.canScheduleTasks) {
+        // Authorization: non-main groups need scheduledTasksAccess permission
+        if (!isMain && !targetGroupEntry.containerConfig?.scheduledTasksAccess) {
           logger.warn(
             { sourceGroup, targetFolder },
-            'schedule_task blocked: group lacks canScheduleTasks permission',
+            'schedule_task blocked: group lacks scheduledTasksAccess permission',
           );
           break;
         }
@@ -496,10 +505,7 @@ export async function processTaskIpc(
           folder: data.folder,
           trigger: data.trigger,
           added_at: new Date().toISOString(),
-          containerConfig: {
-            ...data.containerConfig,
-            canScheduleTasks: data.canScheduleTasks === true,
-          },
+          containerConfig: data.containerConfig,
           requiresTrigger: data.requiresTrigger,
         });
       } else {
@@ -608,16 +614,25 @@ export async function processTaskIpc(
       try {
         const token = await loadGithubAppToken(true);
         if (!token) {
-          logger.warn({ sourceGroup }, 'GitHub App token generation failed during refresh');
+          logger.warn(
+            { sourceGroup },
+            'GitHub App token generation failed during refresh',
+          );
           break;
         }
         // Write response file for the agent to pick up
         const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup);
-        const responsePath = path.join(responseDir, `github-token-${requestId}.json`);
+        const responsePath = path.join(
+          responseDir,
+          `github-token-${requestId}.json`,
+        );
         const tempPath = `${responsePath}.tmp`;
         fs.writeFileSync(tempPath, JSON.stringify({ token }));
         fs.renameSync(tempPath, responsePath);
-        logger.info({ sourceGroup, requestId }, 'GitHub App token refreshed via IPC');
+        logger.info(
+          { sourceGroup, requestId },
+          'GitHub App token refreshed via IPC',
+        );
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error refreshing GitHub App token');
       }
@@ -664,14 +679,11 @@ export async function processTaskIpc(
         azure: 'Azure CLI (`azureAccess`)',
         github: 'GitHub CLI (`githubAccess`)',
         atlassian: 'Atlassian API (`atlassianAccess`)',
-        scheduled_tasks: 'Scheduled Tasks (`canScheduleTasks`)',
+        scheduled_tasks: 'Scheduled Tasks (`scheduledTasksAccess`)',
       };
 
       // Determine the config flag for approval instructions
-      const configFlag =
-        tool === 'scheduled_tasks'
-          ? 'canScheduleTasks: true'
-          : `"${tool}Access": true`;
+      const configFlag = `"${tool === 'scheduled_tasks' ? 'scheduledTasks' : tool}Access": true`;
 
       const message = [
         `**Tool Access Request**`,
@@ -707,9 +719,10 @@ export async function processTaskIpc(
         );
         break;
       }
-      deps.clearSession(targetFolder);
+      const clearSummary = (data.summary as string) || undefined;
+      deps.clearSession(targetFolder, clearSummary);
       logger.info(
-        { targetFolder, sourceGroup },
+        { targetFolder, sourceGroup, summary: clearSummary },
         'Session cleared via IPC — next invocation starts fresh',
       );
       break;

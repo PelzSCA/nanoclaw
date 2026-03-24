@@ -65,7 +65,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
-  canScheduleTasks?: boolean;
+  scheduledTasksAccess?: boolean;
 }
 
 export interface ContainerOutput {
@@ -355,7 +355,9 @@ function requestInstallationToken(
             try {
               resolve(JSON.parse(body).token);
             } catch {
-              reject(new Error(`Failed to parse GitHub token response: ${body}`));
+              reject(
+                new Error(`Failed to parse GitHub token response: ${body}`),
+              );
             }
           } else {
             reject(
@@ -373,7 +375,9 @@ function requestInstallationToken(
 }
 
 /** Load GitHub App config and generate a fresh installation token */
-async function loadGithubAppToken(forceRefresh = false): Promise<string | null> {
+async function loadGithubAppToken(
+  forceRefresh = false,
+): Promise<string | null> {
   // Return cached token if still fresh (50 min lifetime, tokens last 1 hour)
   if (!forceRefresh && appTokenCache && Date.now() < appTokenCache.expiresAt) {
     return appTokenCache.token;
@@ -1061,6 +1065,35 @@ export function writeTasksSnapshot(
   fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
 }
 
+/**
+ * Write session history snapshot for the container to read.
+ * Main group can see all groups' histories; non-main only sees its own.
+ */
+export function writeSessionHistorySnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  history: Array<{
+    id: number;
+    group_folder: string;
+    session_id: string;
+    started_at: string;
+    ended_at: string | null;
+    status: string;
+    summary: string | null;
+    message_count: number;
+  }>,
+): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const filtered = isMain
+    ? history
+    : history.filter((h) => h.group_folder === groupFolder);
+
+  const historyFile = path.join(groupIpcDir, 'session_history.json');
+  fs.writeFileSync(historyFile, JSON.stringify(filtered, null, 2));
+}
+
 export interface AvailableGroup {
   jid: string;
   name: string;
@@ -1137,6 +1170,7 @@ const TOOL_DOC_FILES: Record<string, string> = {
   githubAccess: 'github.md',
   azureAccess: 'azure.md',
   atlassianAccess: 'atlassian.md',
+  scheduledTasksAccess: 'scheduled-tasks.md',
 };
 
 export function writeToolDocsSnapshot(

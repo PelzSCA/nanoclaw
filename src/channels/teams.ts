@@ -49,10 +49,19 @@ function conversationToJid(activity: Partial<Activity>): string {
  * Teams wraps mentions as: <at>BotName</at>
  */
 function stripMentions(text: string): string {
-  return text
+  let cleaned = text
     .replace(/<at>.*?<\/at>/g, '')
+    // Convert <a href="URL">Title</a> → Title (URL) so the agent sees both
+    .replace(
+      /<a\s[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi,
+      (_m, url, title) => {
+        const t = (title as string).trim();
+        return t && t !== url ? `${t} (${url})` : url;
+      },
+    )
     .replace(/\s+/g, ' ')
     .trim();
+  return cleaned;
 }
 
 /**
@@ -171,7 +180,63 @@ export class TeamsChannel implements Channel {
 
     if (activity.type === 'message' && activity.text) {
       const botMentioned = isBotMentioned(activity, this.appId);
+
+      // Debug: log raw activity fields to diagnose URL extraction
+      logger.info(
+        {
+          rawText: activity.text?.substring(0, 500),
+          hasAttachments: !!activity.attachments?.length,
+          attachmentCount: activity.attachments?.length ?? 0,
+          attachments: activity.attachments?.map((a) => ({
+            contentType: a.contentType,
+            contentUrl: a.contentUrl,
+            content:
+              typeof a.content === 'string'
+                ? a.content.substring(0, 300)
+                : JSON.stringify(a.content)?.substring(0, 300),
+          })),
+        },
+        'Teams message raw fields',
+      );
+
       let text = stripMentions(activity.text);
+
+      // Extract URLs from link-unfurl attachments (hero cards, thumbnail
+      // cards, O365 connector cards, etc.) that Teams generates when a
+      // user pastes a link.  The visible text often only contains the
+      // page title, while the actual URL lives in activity.attachments.
+      if (activity.attachments?.length) {
+        const urls: string[] = [];
+        for (const att of activity.attachments) {
+          const content = att.content as Record<string, unknown> | undefined;
+          if (!content) continue;
+          // Hero / thumbnail cards
+          if (content.tap && (content.tap as Record<string, unknown>).value) {
+            const tapUrl = String(
+              (content.tap as Record<string, unknown>).value,
+            );
+            if (tapUrl.startsWith('http')) urls.push(tapUrl);
+          }
+          // Buttons array (common in unfurl cards)
+          if (Array.isArray(content.buttons)) {
+            for (const btn of content.buttons) {
+              if (btn?.value && String(btn.value).startsWith('http')) {
+                urls.push(String(btn.value));
+              }
+            }
+          }
+          // contentUrl (file/media attachments)
+          if (att.contentUrl && att.contentUrl.startsWith('http')) {
+            urls.push(att.contentUrl);
+          }
+        }
+        // Append any discovered URLs that aren't already in the text
+        for (const url of urls) {
+          if (!text.includes(url)) {
+            text = text ? `${text}\n${url}` : url;
+          }
+        }
+      }
 
       // If the bot was @mentioned in Teams (e.g. @NanoClaw-DEV), prepend
       // the canonical trigger so the router's TRIGGER_PATTERN matches.

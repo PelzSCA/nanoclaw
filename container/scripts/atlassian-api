@@ -34,17 +34,46 @@ fi
 
 GATEWAY="https://api.atlassian.com"
 
+## Helper: URL-encode query string values (CQL, JQL, etc.) while preserving
+## the path and parameter structure. Splits on '?' then encodes each param value.
+encode_endpoint() {
+  local ep="$1"
+  if [[ "$ep" != *"?"* ]]; then
+    echo "$ep"
+    return
+  fi
+  local path="${ep%%\?*}"
+  local qs="${ep#*\?}"
+  local encoded_qs
+  encoded_qs=$(python3 -c "
+import urllib.parse, sys
+qs = sys.argv[1]
+parts = qs.split('&')
+encoded = []
+for part in parts:
+    if '=' in part:
+        key, val = part.split('=', 1)
+        encoded.append(key + '=' + urllib.parse.quote(val, safe=',.'))
+    else:
+        encoded.append(urllib.parse.quote(part, safe=''))
+print('&'.join(encoded))
+" "$qs" 2>/dev/null) || encoded_qs="$qs"
+  echo "${path}?${encoded_qs}"
+}
+
 case "${1:-}" in
   jira)
     METHOD="${2:-GET}"
     ENDPOINT="${3:-/rest/api/3/myself}"
     BODY="${4:-}"
+    ENDPOINT=$(encode_endpoint "$ENDPOINT")
     URL="${GATEWAY}/ex/jira/${ATLASSIAN_CLOUD_ID}${ENDPOINT}"
     ;;
   confluence)
     METHOD="${2:-GET}"
     ENDPOINT="${3:-/wiki/rest/api/space}"
     BODY="${4:-}"
+    ENDPOINT=$(encode_endpoint "$ENDPOINT")
     URL="${GATEWAY}/ex/confluence/${ATLASSIAN_CLOUD_ID}${ENDPOINT}"
     ;;
   jira-search)

@@ -23,6 +23,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
   writeToolDocsSnapshot,
+  writeSessionHistorySnapshot,
   initSecrets,
 } from './container-runner.js';
 import {
@@ -35,6 +36,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   deleteSession,
+  getSessionHistory,
   getAllTasks,
   getMessagesSince,
   getNewMessages,
@@ -320,6 +322,10 @@ async function runAgent(
   // Write tool documentation for this group's enabled tools
   writeToolDocsSnapshot(group.folder, group.containerConfig);
 
+  // Write session history snapshot for the container
+  const sessionHistory = getSessionHistory(group.folder, 20);
+  writeSessionHistorySnapshot(group.folder, isMain, sessionHistory);
+
   // Update available groups snapshot (main group only can see all groups)
   const availableGroups = getAvailableGroups();
   writeGroupsSnapshot(
@@ -350,7 +356,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
-        canScheduleTasks: group.containerConfig?.canScheduleTasks ?? false,
+        scheduledTasksAccess: group.containerConfig?.scheduledTasksAccess ?? false,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -656,15 +662,17 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
-    clearSession: (folder: string) => {
+    clearSession: (folder: string, summary?: string) => {
       delete sessions[folder];
-      deleteSession(folder);
+      deleteSession(folder, summary);
     },
     getSession: (folder: string) => sessions[folder],
     setSession: (folder: string, sessionId: string) => {
       sessions[folder] = sessionId;
       setSession(folder, sessionId);
     },
+    getSessionHistory: (folder: string, limit?: number) =>
+      getSessionHistory(folder, limit),
   });
   startAlertProcessor({
     registeredGroups: () => registeredGroups,

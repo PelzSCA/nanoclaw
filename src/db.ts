@@ -78,6 +78,17 @@ function createSchema(database: Database.Database): void {
       group_folder TEXT PRIMARY KEY,
       session_id TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS session_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_folder TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      summary TEXT,
+      message_count INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_history_group ON session_history(group_folder, started_at DESC);
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -633,9 +644,116 @@ export function getSession(groupFolder: string): string | undefined {
 }
 
 export function setSession(groupFolder: string, sessionId: string): void {
+  // Archive previous session if it's changing
+  const prev = getSession(groupFolder);
+  if (prev && prev !== sessionId) {
+    endSessionHistory(groupFolder, prev, 'replaced');
+    addSessionHistory(groupFolder, sessionId);
+  } else if (!prev) {
+    // First session for this group
+    addSessionHistory(groupFolder, sessionId);
+  }
+
   db.prepare(
     'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
   ).run(groupFolder, sessionId);
+}
+
+export function deleteSession(groupFolder: string, summary?: string): void {
+  const prev = getSession(groupFolder);
+  if (prev) {
+    endSessionHistory(groupFolder, prev, 'cleared', summary);
+  }
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
+}
+
+// --- Session history ---
+
+export interface SessionHistoryEntry {
+  id: number;
+  group_folder: string;
+  session_id: string;
+  started_at: string;
+  ended_at: string | null;
+  status: 'active' | 'replaced' | 'cleared';
+  summary: string | null;
+  message_count: number;
+}
+
+/** Record a new session starting. */
+export function addSessionHistory(
+  groupFolder: string,
+  sessionId: string,
+): void {
+  db.prepare(
+    `INSERT INTO session_history (group_folder, session_id, started_at, status)
+     VALUES (?, ?, ?, 'active')`,
+  ).run(groupFolder, sessionId, new Date().toISOString());
+}
+
+/** End the active session — mark it replaced or cleared. */
+export function endSessionHistory(
+  groupFolder: string,
+  sessionId: string,
+  status: 'replaced' | 'cleared',
+  summary?: string,
+  messageCount?: number,
+): void {
+  const updates: string[] = [
+    "ended_at = ?",
+    "status = ?",
+  ];
+  const params: unknown[] = [new Date().toISOString(), status];
+
+  if (summary !== undefined) {
+    updates.push("summary = ?");
+    params.push(summary);
+  }
+  if (messageCount !== undefined) {
+    updates.push("message_count = ?");
+    params.push(messageCount);
+  }
+
+  params.push(groupFolder, sessionId);
+  db.prepare(
+    `UPDATE session_history SET ${updates.join(', ')}
+     WHERE group_folder = ? AND session_id = ? AND status = 'active'`,
+  ).run(...params);
+}
+
+/** Update summary on an existing history entry. */
+export function updateSessionHistorySummary(
+  groupFolder: string,
+  sessionId: string,
+  summary: string,
+  messageCount?: number,
+): void {
+  if (messageCount !== undefined) {
+    db.prepare(
+      `UPDATE session_history SET summary = ?, message_count = ?
+       WHERE group_folder = ? AND session_id = ?`,
+    ).run(summary, messageCount, groupFolder, sessionId);
+  } else {
+    db.prepare(
+      `UPDATE session_history SET summary = ?
+       WHERE group_folder = ? AND session_id = ?`,
+    ).run(summary, groupFolder, sessionId);
+  }
+}
+
+/** Get session history for a group, most recent first. */
+export function getSessionHistory(
+  groupFolder: string,
+  limit = 20,
+): SessionHistoryEntry[] {
+  return db
+    .prepare(
+      `SELECT * FROM session_history
+       WHERE group_folder = ?
+       ORDER BY started_at DESC
+       LIMIT ?`,
+    )
+    .all(groupFolder, limit) as SessionHistoryEntry[];
 }
 
 export function getAllSessions(): Record<string, string> {
@@ -746,10 +864,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   return result;
 }
 
-export function getRecentParticipants(
-  chatJid: string,
-  limit = 10,
-): string[] {
+export function getRecentParticipants(chatJid: string, limit = 10): string[] {
   const rows = db
     .prepare(
       `SELECT DISTINCT sender_name FROM messages
