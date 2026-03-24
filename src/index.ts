@@ -356,7 +356,8 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
-        scheduledTasksAccess: group.containerConfig?.scheduledTasksAccess ?? false,
+        scheduledTasksAccess:
+          group.containerConfig?.scheduledTasksAccess ?? false,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),

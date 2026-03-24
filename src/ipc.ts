@@ -29,7 +29,10 @@ export interface IpcDeps {
   clearSession: (groupFolder: string, summary?: string) => void;
   getSession: (groupFolder: string) => string | undefined;
   setSession: (groupFolder: string, sessionId: string) => void;
-  getSessionHistory: (groupFolder: string, limit?: number) => Array<{
+  getSessionHistory: (
+    groupFolder: string,
+    limit?: number,
+  ) => Array<{
     id: number;
     session_id: string;
     started_at: string;
@@ -259,7 +262,10 @@ export async function processTaskIpc(
         const targetFolder = targetGroupEntry.folder;
 
         // Authorization: non-main groups need scheduledTasksAccess permission
-        if (!isMain && !targetGroupEntry.containerConfig?.scheduledTasksAccess) {
+        if (
+          !isMain &&
+          !targetGroupEntry.containerConfig?.scheduledTasksAccess
+        ) {
           logger.warn(
             { sourceGroup, targetFolder },
             'schedule_task blocked: group lacks scheduledTasksAccess permission',
