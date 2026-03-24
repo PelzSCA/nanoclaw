@@ -6,14 +6,11 @@ import { CronExpressionParser } from 'cron-parser';
 import { randomUUID } from 'crypto';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { AvailableGroup } from './container-runner.js';
+import { AvailableGroup, loadGithubAppToken } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { createSubscription, deleteSubscription } from './alert-db.js';
 import { handleInvestigationComplete } from './alert-processor.js';
-import {
-  isValidGroupFolder,
-  resolveGroupFolderPath,
-} from './group-folder.js';
+import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
@@ -29,6 +26,9 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  clearSession: (groupFolder: string) => void;
+  getSession: (groupFolder: string) => string | undefined;
+  setSession: (groupFolder: string, sessionId: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -248,6 +248,15 @@ export async function processTaskIpc(
         }
 
         const targetFolder = targetGroupEntry.folder;
+
+        // Authorization: non-main groups need canScheduleTasks permission
+        if (!isMain && !targetGroupEntry.containerConfig?.canScheduleTasks) {
+          logger.warn(
+            { sourceGroup, targetFolder },
+            'schedule_task blocked: group lacks canScheduleTasks permission',
+          );
+          break;
+        }
 
         // Authorization: non-main groups can only schedule for themselves
         if (!isMain && targetFolder !== sourceGroup) {
@@ -487,7 +496,10 @@ export async function processTaskIpc(
           folder: data.folder,
           trigger: data.trigger,
           added_at: new Date().toISOString(),
-          containerConfig: data.containerConfig,
+          containerConfig: {
+            ...data.containerConfig,
+            canScheduleTasks: data.canScheduleTasks === true,
+          },
           requiresTrigger: data.requiresTrigger,
         });
       } else {
@@ -587,6 +599,31 @@ export async function processTaskIpc(
       break;
     }
 
+    case 'refresh_github_token': {
+      const requestId = data.requestId as string;
+      if (!requestId) {
+        logger.warn({ sourceGroup }, 'refresh_github_token missing requestId');
+        break;
+      }
+      try {
+        const token = await loadGithubAppToken(true);
+        if (!token) {
+          logger.warn({ sourceGroup }, 'GitHub App token generation failed during refresh');
+          break;
+        }
+        // Write response file for the agent to pick up
+        const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup);
+        const responsePath = path.join(responseDir, `github-token-${requestId}.json`);
+        const tempPath = `${responsePath}.tmp`;
+        fs.writeFileSync(tempPath, JSON.stringify({ token }));
+        fs.renameSync(tempPath, responsePath);
+        logger.info({ sourceGroup, requestId }, 'GitHub App token refreshed via IPC');
+      } catch (err) {
+        logger.error({ err, sourceGroup }, 'Error refreshing GitHub App token');
+      }
+      break;
+    }
+
     case 'request_tool_access': {
       // Non-main groups request tool access — forward to main group as a message
       if (isMain) {
@@ -627,7 +664,14 @@ export async function processTaskIpc(
         azure: 'Azure CLI (`azureAccess`)',
         github: 'GitHub CLI (`githubAccess`)',
         atlassian: 'Atlassian API (`atlassianAccess`)',
+        scheduled_tasks: 'Scheduled Tasks (`canScheduleTasks`)',
       };
+
+      // Determine the config flag for approval instructions
+      const configFlag =
+        tool === 'scheduled_tasks'
+          ? 'canScheduleTasks: true'
+          : `"${tool}Access": true`;
 
       const message = [
         `**Tool Access Request**`,
@@ -641,7 +685,7 @@ export async function processTaskIpc(
         ``,
         `To approve, re-register the group with the flag enabled:`,
         '```',
-        `register_group with jid="${requestChatJid}" and containerConfig: { "${tool}Access": true }`,
+        `register_group with jid="${requestChatJid}" and containerConfig: { ${configFlag} }`,
         '```',
       ].join('\n');
 
@@ -649,6 +693,47 @@ export async function processTaskIpc(
       logger.info(
         { tool, groupName, sourceGroup, mainJid },
         'Tool access request forwarded to main group',
+      );
+      break;
+    }
+
+    case 'clear_session': {
+      // Clear session for own group (any group) or another group (main only)
+      const targetFolder = (data.targetFolder as string) || sourceGroup;
+      if (targetFolder !== sourceGroup && !isMain) {
+        logger.warn(
+          { sourceGroup, targetFolder },
+          'Non-main group tried to clear another group session',
+        );
+        break;
+      }
+      deps.clearSession(targetFolder);
+      logger.info(
+        { targetFolder, sourceGroup },
+        'Session cleared via IPC — next invocation starts fresh',
+      );
+      break;
+    }
+
+    case 'recover_session': {
+      // Restore a previous session ID for own group or another group (main only)
+      const recoverFolder = (data.targetFolder as string) || sourceGroup;
+      const recoverSessionId = data.sessionId as string;
+      if (!recoverSessionId) {
+        logger.warn({ data }, 'Invalid recover_session — missing sessionId');
+        break;
+      }
+      if (recoverFolder !== sourceGroup && !isMain) {
+        logger.warn(
+          { sourceGroup, recoverFolder },
+          'Non-main group tried to recover another group session',
+        );
+        break;
+      }
+      deps.setSession(recoverFolder, recoverSessionId);
+      logger.info(
+        { recoverFolder, recoverSessionId, sourceGroup },
+        'Session recovered via IPC',
       );
       break;
     }

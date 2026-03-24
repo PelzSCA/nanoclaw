@@ -3,7 +3,9 @@
  * Spawns agent execution in containers and handles IPC
  */
 import { ChildProcess, exec, spawn } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
+import https from 'https';
 import path from 'path';
 
 import {
@@ -13,7 +15,7 @@ import {
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
-  GITHUB_TOKENS_PATH,
+  GITHUB_APP_CONFIG_PATH,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   MAX_WORKSPACE_SIZE,
@@ -63,6 +65,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  canScheduleTasks?: boolean;
 }
 
 export interface ContainerOutput {
@@ -71,6 +74,19 @@ export interface ContainerOutput {
   newSessionId?: string;
   error?: string;
 }
+
+export interface QuotaInfo {
+  groupName: string;
+  chatJid: string;
+  sizeMB: string;
+  limitMB: string;
+}
+
+/** Called when workspace quota is exceeded - should notify main chat and user chat */
+export type QuotaExceededCallback = (info: QuotaInfo) => Promise<void>;
+
+/** Called when workspace is approaching quota - should notify user chat only */
+export type QuotaWarningCallback = (info: QuotaInfo) => Promise<void>;
 
 interface VolumeMount {
   hostPath: string;
@@ -280,9 +296,119 @@ async function loadTokenFile<T>(
   return ((data[groupFolder] ?? data['_default']) as T) || null;
 }
 
-/** GitHub: returns a single token string */
-async function loadGithubToken(groupFolder: string): Promise<string | null> {
-  return loadTokenFile<string>(GITHUB_TOKENS_PATH, groupFolder);
+/**
+ * GitHub App configuration file format:
+ * {
+ *   "appId": 123456,
+ *   "privateKeyPath": "/home/user/.config/nanoclaw/github-app.pem",
+ *   "installationId": 78901234
+ * }
+ */
+interface GitHubAppConfig {
+  appId: number;
+  privateKeyPath: string;
+  installationId: number;
+}
+
+/** Cache for GitHub App installation tokens (they last 1 hour, we refresh at 50 min) */
+let appTokenCache: { token: string; expiresAt: number } | null = null;
+
+/** Create an RS256 JWT for GitHub App authentication */
+function createGitHubAppJwt(appId: number, privateKey: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(
+    JSON.stringify({ alg: 'RS256', typ: 'JWT' }),
+  ).toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({ iat: now - 60, exp: now + 600, iss: String(appId) }),
+  ).toString('base64url');
+  const signature = crypto
+    .createSign('RSA-SHA256')
+    .update(`${header}.${payload}`)
+    .sign(privateKey, 'base64url');
+  return `${header}.${payload}.${signature}`;
+}
+
+/** Exchange a JWT for a short-lived installation access token via GitHub API */
+function requestInstallationToken(
+  jwt: string,
+  installationId: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'api.github.com',
+        path: `/app/installations/${installationId}/access_tokens`,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'nanoclaw',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk: Buffer) => (body += chunk.toString()));
+        res.on('end', () => {
+          if (res.statusCode === 201) {
+            try {
+              resolve(JSON.parse(body).token);
+            } catch {
+              reject(new Error(`Failed to parse GitHub token response: ${body}`));
+            }
+          } else {
+            reject(
+              new Error(
+                `GitHub installation token request failed (${res.statusCode}): ${body}`,
+              ),
+            );
+          }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** Load GitHub App config and generate a fresh installation token */
+async function loadGithubAppToken(forceRefresh = false): Promise<string | null> {
+  // Return cached token if still fresh (50 min lifetime, tokens last 1 hour)
+  if (!forceRefresh && appTokenCache && Date.now() < appTokenCache.expiresAt) {
+    return appTokenCache.token;
+  }
+
+  try {
+    if (!fs.existsSync(GITHUB_APP_CONFIG_PATH)) return null;
+    const config: GitHubAppConfig = JSON.parse(
+      fs.readFileSync(GITHUB_APP_CONFIG_PATH, 'utf-8'),
+    );
+    if (!config.appId || !config.privateKeyPath || !config.installationId) {
+      return null;
+    }
+    const privateKey = fs.readFileSync(config.privateKeyPath, 'utf-8');
+    const jwt = createGitHubAppJwt(config.appId, privateKey);
+    const token = await requestInstallationToken(jwt, config.installationId);
+
+    appTokenCache = {
+      token,
+      expiresAt: Date.now() + 50 * 60 * 1000, // refresh after 50 min
+    };
+    logger.info('Generated fresh GitHub App installation token');
+    return token;
+  } catch (err) {
+    logger.warn({ error: err }, 'Failed to generate GitHub App token');
+    return null;
+  }
+}
+
+/** Generate a fresh GitHub App installation token (exported for IPC refresh handler) */
+export { loadGithubAppToken };
+
+/** GitHub: returns a GitHub App installation token */
+async function loadGithubToken(_groupFolder: string): Promise<string | null> {
+  return loadGithubAppToken();
 }
 
 /**
@@ -407,6 +533,9 @@ function buildContainerArgs(
     }
   }
 
+  // Limit /tmp to prevent tmpfs abuse (100MB limit)
+  args.push('--tmpfs', '/tmp:rw,size=100m,exec');
+
   args.push(CONTAINER_IMAGE);
 
   return args;
@@ -439,6 +568,8 @@ export async function runContainerAgent(
   input: ContainerInput,
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  onQuotaWarning?: QuotaWarningCallback,
+  onQuotaExceeded?: QuotaExceededCallback,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
@@ -446,30 +577,83 @@ export async function runContainerAgent(
   fs.mkdirSync(groupDir, { recursive: true });
 
   // Workspace size check
-  const maxSize =
-    group.containerConfig?.maxWorkspaceSize || MAX_WORKSPACE_SIZE;
+  const maxSize = group.containerConfig?.maxWorkspaceSize || MAX_WORKSPACE_SIZE;
+  const initialSize = maxSize > 0 ? getDirectorySize(groupDir) : 0;
+
   if (maxSize > 0) {
-    const currentSize = getDirectorySize(groupDir);
-    const sizeMB = (currentSize / 1024 / 1024).toFixed(1);
+    const sizeMB = (initialSize / 1024 / 1024).toFixed(1);
     const limitMB = (maxSize / 1024 / 1024).toFixed(1);
-    if (currentSize > maxSize) {
+    if (initialSize > maxSize) {
       logger.error(
         { group: group.name, sizeMB, limitMB },
         'Workspace exceeds size limit',
       );
+      // Notify both main and user about quota violation (fire-and-forget)
+      if (onQuotaExceeded) {
+        onQuotaExceeded({
+          groupName: group.name,
+          chatJid: input.chatJid,
+          sizeMB,
+          limitMB,
+        }).catch((err) => {
+          logger.warn(
+            { err, group: group.name },
+            'Failed to send quota exceeded notification',
+          );
+        });
+      }
       return {
         status: 'error',
         result: null,
         error: `Workspace is ${sizeMB}MB, exceeding the ${limitMB}MB limit. Clean up files to continue.`,
       };
     }
-    if (currentSize > maxSize * 0.8) {
+    if (initialSize > maxSize * 0.8) {
       logger.warn(
         { group: group.name, sizeMB, limitMB },
         'Workspace approaching size limit',
       );
+      // Notify user chat about approaching limit (fire-and-forget)
+      if (onQuotaWarning) {
+        onQuotaWarning({
+          groupName: group.name,
+          chatJid: input.chatJid,
+          sizeMB,
+          limitMB,
+        }).catch((err) => {
+          logger.warn(
+            { err, group: group.name },
+            'Failed to send quota warning notification',
+          );
+        });
+      }
     }
   }
+
+  // Helper to check workspace size after container completes and notify if exceeded
+  const checkPostExecutionSize = () => {
+    if (maxSize <= 0 || !onQuotaExceeded) return;
+    const finalSize = getDirectorySize(groupDir);
+    if (finalSize > maxSize && finalSize > initialSize) {
+      const sizeMB = (finalSize / 1024 / 1024).toFixed(1);
+      const limitMB = (maxSize / 1024 / 1024).toFixed(1);
+      logger.warn(
+        { group: group.name, sizeMB, limitMB },
+        'Workspace exceeded size limit during execution',
+      );
+      onQuotaExceeded({
+        groupName: group.name,
+        chatJid: input.chatJid,
+        sizeMB,
+        limitMB,
+      }).catch((err) => {
+        logger.warn(
+          { err, group: group.name },
+          'Failed to send post-execution quota notification',
+        );
+      });
+    }
+  };
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
@@ -772,6 +956,7 @@ export async function runContainerAgent(
       // Streaming mode: wait for output chain to settle, return completion marker
       if (onOutput) {
         outputChain.then(() => {
+          checkPostExecutionSize();
           logger.info(
             { group: group.name, duration, newSessionId },
             'Container completed (streaming mode)',
@@ -814,6 +999,7 @@ export async function runContainerAgent(
           'Container completed',
         );
 
+        checkPostExecutionSize();
         resolve(output);
       } catch (err) {
         logger.error(

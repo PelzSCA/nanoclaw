@@ -34,6 +34,7 @@ import {
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
+  deleteSession,
   getAllTasks,
   getMessagesSince,
   getNewMessages,
@@ -349,10 +350,47 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        canScheduleTasks: group.containerConfig?.canScheduleTasks ?? false,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
+      // Warn user when approaching quota (80% threshold)
+      async ({ groupName, chatJid, sizeMB, limitMB }) => {
+        const channel = findChannel(channels, chatJid);
+        if (!channel) return;
+        await channel.sendMessage(
+          chatJid,
+          `⚠️ Your workspace is approaching the storage limit (${sizeMB}MB / ${limitMB}MB). Consider cleaning up large files to avoid being blocked.`,
+        );
+      },
+      // Notify main group AND user's chat when workspace quota is exceeded
+      async ({ groupName, chatJid, sizeMB, limitMB }) => {
+        const mainGroup = Object.entries(registeredGroups).find(
+          ([, g]) => g.isMain,
+        );
+
+        // Send to main group
+        if (mainGroup) {
+          const [mainJid] = mainGroup;
+          const mainChannel = findChannel(channels, mainJid);
+          if (mainChannel) {
+            await mainChannel.sendMessage(
+              mainJid,
+              `⚠️ Storage quota exceeded for ${groupName}: ${sizeMB}MB used (limit: ${limitMB}MB). The user is blocked until cleanup.`,
+            );
+          }
+        }
+
+        // Send to the user's chat
+        const userChannel = findChannel(channels, chatJid);
+        if (userChannel) {
+          await userChannel.sendMessage(
+            chatJid,
+            `🚫 Your workspace has exceeded the storage limit (${sizeMB}MB / ${limitMB}MB). You'll be blocked until files are cleaned up.`,
+          );
+        }
+      },
     );
 
     if (output.newSessionId) {
@@ -618,6 +656,15 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    clearSession: (folder: string) => {
+      delete sessions[folder];
+      deleteSession(folder);
+    },
+    getSession: (folder: string) => sessions[folder],
+    setSession: (folder: string, sessionId: string) => {
+      sessions[folder] = sessionId;
+      setSession(folder, sessionId);
+    },
   });
   startAlertProcessor({
     registeredGroups: () => registeredGroups,

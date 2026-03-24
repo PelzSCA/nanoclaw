@@ -19,6 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const canScheduleTasks = process.env.NANOCLAW_CAN_SCHEDULE_TASKS === '1';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -62,6 +63,8 @@ server.tool(
   },
 );
 
+// Task scheduling tools - only available if canScheduleTasks permission is granted or is main
+if (isMain || canScheduleTasks) {
 server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
@@ -151,6 +154,57 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     };
   },
 );
+
+server.tool(
+  'update_task',
+  'Update an existing scheduled task. Only provided fields are changed; omitted fields stay the same.',
+  {
+    task_id: z.string().describe('The task ID to update'),
+    prompt: z.string().optional().describe('New prompt for the task'),
+    schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
+    schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
+  },
+  async (args) => {
+    // Validate schedule_value if provided
+    if (args.schedule_type === 'cron' || (!args.schedule_type && args.schedule_value)) {
+      if (args.schedule_value) {
+        try {
+          CronExpressionParser.parse(args.schedule_value);
+        } catch {
+          return {
+            content: [{ type: 'text' as const, text: `Invalid cron: "${args.schedule_value}".` }],
+            isError: true,
+          };
+        }
+      }
+    }
+    if (args.schedule_type === 'interval' && args.schedule_value) {
+      const ms = parseInt(args.schedule_value, 10);
+      if (isNaN(ms) || ms <= 0) {
+        return {
+          content: [{ type: 'text' as const, text: `Invalid interval: "${args.schedule_value}".` }],
+          isError: true,
+        };
+      }
+    }
+
+    const data: Record<string, string | undefined> = {
+      type: 'update_task',
+      taskId: args.task_id,
+      groupFolder,
+      isMain: String(isMain),
+      timestamp: new Date().toISOString(),
+    };
+    if (args.prompt !== undefined) data.prompt = args.prompt;
+    if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
+    if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} update requested.` }] };
+  },
+);
+} // end canScheduleTasks conditional
 
 server.tool(
   'list_tasks',
@@ -248,52 +302,60 @@ server.tool(
 );
 
 server.tool(
-  'update_task',
-  'Update an existing scheduled task. Only provided fields are changed; omitted fields stay the same.',
+  'clear_session',
+  'Clear the conversation session for this group. The next agent invocation will start with a fresh context (no prior conversation history). Use when the conversation context is stale, confused, or the user asks to start fresh. The current invocation is not affected — the reset takes effect on the NEXT message.',
   {
-    task_id: z.string().describe('The task ID to update'),
-    prompt: z.string().optional().describe('New prompt for the task'),
-    schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
-    schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
+    target_folder: z.string().optional().describe('Group folder to clear (main only, defaults to own group)'),
   },
   async (args) => {
-    // Validate schedule_value if provided
-    if (args.schedule_type === 'cron' || (!args.schedule_type && args.schedule_value)) {
-      if (args.schedule_value) {
-        try {
-          CronExpressionParser.parse(args.schedule_value);
-        } catch {
-          return {
-            content: [{ type: 'text' as const, text: `Invalid cron: "${args.schedule_value}".` }],
-            isError: true,
-          };
-        }
-      }
+    const targetFolder = args.target_folder || groupFolder;
+    if (targetFolder !== groupFolder && !isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can clear other groups\' sessions.' }] };
     }
-    if (args.schedule_type === 'interval' && args.schedule_value) {
-      const ms = parseInt(args.schedule_value, 10);
-      if (isNaN(ms) || ms <= 0) {
-        return {
-          content: [{ type: 'text' as const, text: `Invalid interval: "${args.schedule_value}".` }],
-          isError: true,
-        };
-      }
-    }
-
-    const data: Record<string, string | undefined> = {
-      type: 'update_task',
-      taskId: args.task_id,
+    const data = {
+      type: 'clear_session',
+      targetFolder,
       groupFolder,
-      isMain: String(isMain),
+      isMain,
       timestamp: new Date().toISOString(),
     };
-    if (args.prompt !== undefined) data.prompt = args.prompt;
-    if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
-    if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
-
     writeIpcFile(TASKS_DIR, data);
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Session cleared for ${targetFolder}. The next message will start a fresh conversation with no prior history.`,
+      }],
+    };
+  },
+);
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} update requested.` }] };
+server.tool(
+  'recover_session',
+  'Restore a previous session ID for a group. Use to roll back to an earlier conversation state. Main group can recover any group; other groups can only recover their own.',
+  {
+    session_id: z.string().describe('The session ID to restore'),
+    target_folder: z.string().optional().describe('Group folder to recover (main only, defaults to own group)'),
+  },
+  async (args) => {
+    const targetFolder = args.target_folder || groupFolder;
+    if (targetFolder !== groupFolder && !isMain) {
+      return { content: [{ type: 'text' as const, text: 'Only the main group can recover other groups\' sessions.' }] };
+    }
+    const data = {
+      type: 'recover_session',
+      targetFolder,
+      sessionId: args.session_id,
+      groupFolder,
+      isMain,
+      timestamp: new Date().toISOString(),
+    };
+    writeIpcFile(TASKS_DIR, data);
+    return {
+      content: [{
+        type: 'text' as const,
+        text: `Session recovery requested for ${targetFolder}. Next invocation will resume session ${args.session_id}.`,
+      }],
+    };
   },
 );
 
@@ -301,12 +363,15 @@ server.tool(
   'register_group',
   `Register a new chat/group so the agent can respond to messages there. Main group only.
 
-Use available_groups.json to find the JID for a group. The folder name must be channel-prefixed: "{channel}_{group-name}" (e.g., "whatsapp_family-chat", "telegram_dev-team", "discord_general"). Use lowercase with hyphens for the group name part.`,
+Use available_groups.json to find the JID for a group. The folder name must be channel-prefixed: "{channel}_{group-name}" (e.g., "whatsapp_family-chat", "telegram_dev-team", "discord_general"). Use lowercase with hyphens for the group name part.
+
+Permissions: By default, non-main groups cannot schedule tasks. Set can_schedule_tasks=true to allow them to create recurring tasks.`,
   {
     jid: z.string().describe('The chat JID (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")'),
     name: z.string().describe('Display name for the group'),
     folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+    can_schedule_tasks: z.boolean().optional().describe('Allow this group to create scheduled tasks. Default: false for non-main groups.'),
   },
   async (args) => {
     if (!isMain) {
@@ -322,6 +387,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       name: args.name,
       folder: args.folder,
       trigger: args.trigger,
+      canScheduleTasks: args.can_schedule_tasks,
       timestamp: new Date().toISOString(),
     };
 
@@ -493,14 +559,14 @@ server.tool(
 
 server.tool(
   'request_tool_access',
-  'Request access to a CLI tool (e.g. az, gh, atlassian-api) for this group. ' +
+  'Request access to a CLI tool or capability (e.g. az, gh, atlassian-api, scheduled_tasks) for this group. ' +
   'Sends a structured request to the admin channel for approval. ' +
   'Only available to non-main groups — main already has direct access to configure tools.',
   {
-    tool: z.enum(['azure', 'github', 'atlassian']).describe(
-      'The tool to request access to: "azure" (az CLI), "github" (gh CLI), or "atlassian" (atlassian-api)',
+    tool: z.enum(['azure', 'github', 'atlassian', 'scheduled_tasks']).describe(
+      'The tool or capability to request: "azure" (az CLI), "github" (gh CLI), "atlassian" (atlassian-api), or "scheduled_tasks" (task scheduling)',
     ),
-    reason: z.string().describe('Why this group needs access to the tool'),
+    reason: z.string().describe('Why this group needs access to this tool or capability'),
   },
   async (args) => {
     if (isMain) {
@@ -521,6 +587,56 @@ server.tool(
     writeIpcFile(TASKS_DIR, data);
     return {
       content: [{ type: 'text' as const, text: `Access request for "${args.tool}" sent to admin channel for approval.` }],
+    };
+  },
+);
+
+server.tool(
+  'refresh_github_token',
+  'Refresh the GitHub App installation token when gh CLI commands fail with 401/403 authentication errors. ' +
+  'Returns the new token. You MUST then run: export GH_TOKEN=<token> in your Bash session to apply it.',
+  {},
+  async () => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'refresh_github_token',
+      requestId,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+    writeIpcFile(TASKS_DIR, data);
+
+    // Poll for the host's response file (host writes github-token-<requestId>.json)
+    const responseFile = path.join(IPC_DIR, `github-token-${requestId}.json`);
+    const maxWaitMs = 10_000;
+    const pollMs = 300;
+    const deadline = Date.now() + maxWaitMs;
+
+    while (Date.now() < deadline) {
+      if (fs.existsSync(responseFile)) {
+        try {
+          const { token } = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+          fs.unlinkSync(responseFile);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `Fresh GitHub token obtained. Run this command to apply it:\n\nexport GH_TOKEN=${token}\n\nAll subsequent gh commands in this shell session will use the new token.`,
+            }],
+          };
+        } catch {
+          fs.unlinkSync(responseFile);
+          return {
+            content: [{ type: 'text' as const, text: 'Failed to read refreshed token.' }],
+            isError: true,
+          };
+        }
+      }
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: 'Token refresh timed out. The host may not have processed the request yet — try again.' }],
+      isError: true,
     };
   },
 );

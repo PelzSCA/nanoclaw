@@ -34,6 +34,7 @@ export interface ContainerConfig {
   azureAccess?: boolean; // Enable az CLI — mounts host ~/.azure/ read-only
   atlassianAccess?: boolean; // Enable acli — credentials from ~/.config/nanoclaw/atlassian-tokens.json
   maxWorkspaceSize?: number; // Per-group override for MAX_WORKSPACE_SIZE (bytes)
+  canScheduleTasks?: boolean; // Allow group to create scheduled tasks. Default: false for non-main groups
 }
 
 export interface RegisteredGroup {
