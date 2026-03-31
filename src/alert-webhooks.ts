@@ -1,4 +1,6 @@
-import { registerRoute, bearerAuth, loadWebhookTokens } from './http-server.js';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { registerRoute } from './http-server.js';
+import type { HttpMiddleware } from './http-server.js';
 import {
   normalizeAzureMonitor,
   normalizeJiraSM,
@@ -8,9 +10,45 @@ import { ingestAlert } from './alert-ingestion.js';
 import { getRecentAlerts } from './alert-db.js';
 import { logger } from './logger.js';
 
+function entraIdAuth(): HttpMiddleware {
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const audience = process.env.AZURE_CLIENT_ID;
+
+  if (!tenantId || !audience) {
+    logger.warn(
+      'AZURE_TENANT_ID or AZURE_CLIENT_ID not set — Azure alert endpoint is unauthenticated',
+    );
+    return (_req, _res, next) => next();
+  }
+
+  const JWKS = createRemoteJWKSet(
+    new URL(
+      `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`,
+    ),
+  );
+  const issuer = `https://sts.windows.net/${tenantId}/`;
+
+  return async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing Authorization header' }));
+      return;
+    }
+    const token = authHeader.slice(7);
+    try {
+      await jwtVerify(token, JWKS, { issuer, audience });
+      await next();
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'Azure webhook JWT validation failed');
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid token' }));
+    }
+  };
+}
+
 export function registerAlertWebhooks(): void {
-  const tokens = loadWebhookTokens();
-  const auth = Object.keys(tokens).length > 0 ? [bearerAuth(tokens)] : [];
+  const azureAuth = [entraIdAuth()];
 
   registerRoute(
     'POST',
@@ -35,7 +73,7 @@ export function registerAlertWebhooks(): void {
         res.end(JSON.stringify({ error: err.message }));
       }
     },
-    auth,
+    azureAuth,
   );
 
   registerRoute(
@@ -62,7 +100,6 @@ export function registerAlertWebhooks(): void {
         res.end(JSON.stringify({ error: err.message }));
       }
     },
-    auth,
   );
 
   registerRoute(
@@ -89,7 +126,6 @@ export function registerAlertWebhooks(): void {
         res.end(JSON.stringify({ error: err.message }));
       }
     },
-    auth,
   );
 
   // Status endpoint — no auth, useful for debugging
@@ -115,8 +151,5 @@ export function registerAlertWebhooks(): void {
     );
   });
 
-  logger.info(
-    { authEnabled: auth.length > 0 },
-    'Alert webhook routes registered',
-  );
+  logger.info('Alert webhook routes registered');
 }

@@ -28,6 +28,8 @@ atlassian-tokens.json
 
 # Temp files
 .tmp-*
+*.zip
+github-app.example.json
 
 # OS
 .DS_Store
