@@ -1,4 +1,5 @@
 import { ChildProcess } from 'child_process';
+import { randomUUID } from 'crypto';
 
 import { ASSISTANT_NAME } from './config.js';
 import {
@@ -6,6 +7,7 @@ import {
   getAlertFrequency,
   getCorrelatedAlerts,
   getAlertKnowledge,
+  getPendingAlerts,
   updateAlertInvestigation,
   closeAlertContext,
   upsertAlertKnowledge,
@@ -38,6 +40,34 @@ export interface AlertProcessorDependencies {
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
   getMainGroup: () => { jid: string; group: RegisteredGroup } | null;
+}
+
+export function recoverPendingAlerts(deps: AlertProcessorDependencies): void {
+  const pending = getPendingAlerts();
+  if (pending.length === 0) return;
+
+  logger.info(
+    { count: pending.length },
+    'Recovering pending alerts from previous session',
+  );
+
+  // Group by existing contextId where present, ungrouped alerts share a new context
+  const groups = new Map<string, typeof pending>();
+  for (const alert of pending) {
+    const key = alert.contextId || 'ungrouped';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(alert);
+  }
+
+  for (const [key, alerts] of groups) {
+    const contextId = key === 'ungrouped' ? randomUUID() : key;
+    processAlertBatch(alerts, contextId, deps).catch((err) =>
+      logger.error(
+        { err, contextId },
+        'Alert recovery batch processing failed',
+      ),
+    );
+  }
 }
 
 export function startAlertProcessor(deps: AlertProcessorDependencies): void {
