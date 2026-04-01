@@ -205,6 +205,12 @@ export class TeamsChannel implements Channel {
       const actionData = (activity.value as any)?.action?.data as
         | Record<string, string>
         | undefined;
+      const toolNames: Record<string, string> = {
+        azure: 'Azure CLI',
+        github: 'GitHub CLI',
+        atlassian: 'Atlassian API',
+        scheduled_tasks: 'Scheduled Tasks',
+      };
 
       if (
         actionVerb === 'approve_tool_access' &&
@@ -230,17 +236,23 @@ export class TeamsChannel implements Channel {
           await context.sendActivity(
             `Access approved: ${group.name} now has ${tool} CLI access.`,
           );
+          await this.sendMessage(
+            requestJid,
+            `Your request for ${toolNames[tool] || tool} access has been approved. You can now use it.`,
+          );
         } else {
           await context.sendActivity(
             `Could not find registered group for this request.`,
           );
         }
-      } else if (actionVerb === 'deny_tool_access') {
-        const groupName = actionData?.requestJid
-          ? (this.opts.registeredGroups()[actionData.requestJid]?.name ??
-            actionData.requestJid)
-          : 'unknown';
+      } else if (actionVerb === 'deny_tool_access' && actionData?.requestJid) {
+        const group = this.opts.registeredGroups()[actionData.requestJid];
+        const groupName = group?.name ?? actionData.requestJid;
         await context.sendActivity(`Access request denied for ${groupName}.`);
+        await this.sendMessage(
+          actionData.requestJid,
+          `Your request for ${toolNames[actionData.tool] || actionData.tool} access has been denied.`,
+        );
       }
 
       // Respond to the invoke so Teams clears the card's loading state
