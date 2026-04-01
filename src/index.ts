@@ -24,6 +24,7 @@ import {
   writeTasksSnapshot,
   writeToolDocsSnapshot,
   writeSessionHistorySnapshot,
+  writeAlertsSnapshot,
   initSecrets,
 } from './container-runner.js';
 import {
@@ -65,6 +66,7 @@ import {
   recoverPendingAlerts,
 } from './alert-processor.js';
 import { registerAlertWebhooks } from './alert-webhooks.js';
+import { initMetrics } from './metrics.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -324,6 +326,7 @@ async function runAgent(
 
   // Write tool documentation for this group's enabled tools
   writeToolDocsSnapshot(group.folder, group.containerConfig);
+  writeAlertsSnapshot(group.folder);
 
   // Write session history snapshot for the container
   const sessionHistory = getSessionHistory(group.folder, 20);
@@ -563,6 +566,7 @@ async function main(): Promise<void> {
   );
 
   // Start shared HTTP server — channels and subsystems register routes against this
+  initMetrics();
   registerAlertWebhooks();
   await startHttpServer(HTTP_SERVER_PORT);
 

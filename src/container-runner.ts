@@ -38,6 +38,8 @@ import {
   SecretProvider,
 } from './secret-provider.js';
 import { readEnvFile } from './env.js';
+import { getRecentAlerts, getPendingAlerts } from './alert-db.js';
+import { containerInvocationsTotal, containerDuration } from './metrics.js';
 import { ContainerConfig, RegisteredGroup } from './types.js';
 
 let secretProvider: SecretProvider | null = null;
@@ -827,9 +829,15 @@ export async function runContainerAgent(
       timeout = setTimeout(killOnTimeout, timeoutMs);
     };
 
+    containerInvocationsTotal?.add(1, { group: group.name });
+
     container.on('close', (code) => {
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
+      containerDuration?.record(duration / 1000, {
+        group: group.name,
+        status: timedOut ? 'timeout' : code !== 0 ? 'error' : 'success',
+      });
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1158,6 +1166,57 @@ export function writeSubscriptionsSnapshot(
 
   const subsFile = path.join(groupIpcDir, 'alert_subscriptions.json');
   fs.writeFileSync(subsFile, JSON.stringify(filtered, null, 2));
+}
+
+/**
+ * Write a snapshot of recent alert status to the group's IPC directory
+ * so container agents can read it from /workspace/ipc/alerts-status.json.
+ */
+export function writeAlertsSnapshot(groupFolder: string): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const recent = getRecentAlerts(since1h, 100);
+  const pending = getPendingAlerts();
+
+  const byStatus: Record<string, number> = {};
+  for (const a of recent) {
+    const s = a.investigationStatus || 'unknown';
+    byStatus[s] = (byStatus[s] || 0) + 1;
+  }
+
+  const snapshot = {
+    generatedAt: new Date().toISOString(),
+    lastHour: {
+      total: recent.length,
+      byInvestigationStatus: byStatus,
+      alerts: recent.map((a: { id: string; type: string; severity: number; status: string; investigationStatus?: string; investigationSummary?: string; firedAt: string; resource: string }) => ({
+        id: a.id,
+        type: a.type,
+        severity: a.severity,
+        status: a.status,
+        investigationStatus: a.investigationStatus,
+        investigationSummary: a.investigationSummary,
+        firedAt: a.firedAt,
+        resource: a.resource,
+      })),
+    },
+    pendingInvestigations: {
+      count: pending.length,
+      alerts: pending.map((a: { id: string; type: string; severity: number; firedAt: string }) => ({
+        id: a.id,
+        type: a.type,
+        severity: a.severity,
+        firedAt: a.firedAt,
+      })),
+    },
+  };
+
+  fs.writeFileSync(
+    path.join(groupIpcDir, 'alerts-status.json'),
+    JSON.stringify(snapshot, null, 2),
+  );
 }
 
 /**

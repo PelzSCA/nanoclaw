@@ -20,11 +20,17 @@ import {
   writeTasksSnapshot,
   writeSubscriptionsSnapshot,
   writeToolDocsSnapshot,
+  writeAlertsSnapshot,
 } from './container-runner.js';
 import { getAllTasks, setSession } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { setOnBatchReady } from './alert-ingestion.js';
 import { logger } from './logger.js';
+import {
+  alertsInvestigatedTotal,
+  alertInvestigationDuration,
+  setPendingInvestigations,
+} from './metrics.js';
 import { RegisteredGroup } from './types.js';
 
 export interface AlertProcessorDependencies {
@@ -121,6 +127,7 @@ async function processAlertBatch(
   for (const a of investigable) {
     updateAlertInvestigation(a.id, 'investigating');
   }
+  setPendingInvestigations?.(getPendingAlerts().length);
 
   logger.info(
     {
@@ -172,6 +179,7 @@ async function runAlertInvestigation(
   );
 
   writeToolDocsSnapshot(group.folder, group.containerConfig);
+  writeAlertsSnapshot(group.folder);
 
   const subs = getAllSubscriptions();
   writeSubscriptionsSnapshot(
@@ -379,8 +387,15 @@ export function handleInvestigationComplete(
     ? getAlertsByContext(contextId).filter((a) => alertIds.includes(a.id))
     : getAlertsByContext(contextId);
 
+  const now = Date.now();
   for (const alert of alerts) {
     updateAlertInvestigation(alert.id, 'complete', summary, priority);
+    // Record investigation duration (from when alert was received)
+    const durationSec = (now - new Date(alert.receivedAt).getTime()) / 1000;
+    alertInvestigationDuration?.record(durationSec, {
+      source: alert.source,
+      priority: String(priority),
+    });
     // Update knowledge base
     if (summary) {
       upsertAlertKnowledge(
@@ -392,6 +407,8 @@ export function handleInvestigationComplete(
       );
     }
   }
+  alertsInvestigatedTotal?.add(alerts.length, { priority: String(priority) });
+  setPendingInvestigations?.(getPendingAlerts().length);
 
   // Close the context
   closeAlertContext(contextId, summary || 'Investigation complete');

@@ -13,6 +13,7 @@ import {
   setAlertContext,
   createAlertContext,
 } from './alert-db.js';
+import { alertsIngestedTotal } from './metrics.js';
 import { logger } from './logger.js';
 
 interface BatchedAlerts {
@@ -76,6 +77,7 @@ export function ingestAlert(
   // Store immediately (even if suppressed — for frequency tracking)
   insertAlert(alert);
   indexAlertFts(alert);
+  alertsIngestedTotal?.add(1, { source: alert.source, severity: String(alert.severity) });
 
   // Check suppression
   if (isAlertSuppressed(alert.fingerprint)) {
