@@ -99,6 +99,15 @@ async function processAlertBatch(
   const investigable = alerts.filter((a) => a.severity <= 4);
   const infoAlerts = alerts.filter((a) => a.severity >= 5);
 
+  // Mark info-only alerts as complete so they don't stay stuck in 'batching'
+  for (const a of infoAlerts) {
+    updateAlertInvestigation(
+      a.id,
+      'complete',
+      'Info-only alert, no investigation required',
+    );
+  }
+
   if (investigable.length === 0) return;
 
   // Gather context
@@ -139,12 +148,15 @@ async function processAlertBatch(
     'Dispatching alert investigation',
   );
 
-  // Enqueue to the main group's container
-  deps.queue.enqueueTask(mainGroup.jid, `alert-${contextId}`, () =>
+  // Use a virtual JID so investigations run concurrently instead of
+  // serializing behind the single mainGroup.jid queue slot.
+  const virtualJid = `alert-inv-${contextId}`;
+  deps.queue.enqueueTask(virtualJid, `alert-${contextId}`, () =>
     runAlertInvestigation(
       mainGroup.group,
       prompt,
       mainGroup.jid,
+      virtualJid,
       contextId,
       deps,
     ),
@@ -155,6 +167,7 @@ async function runAlertInvestigation(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  queueJid: string,
   contextId: string,
   deps: AlertProcessorDependencies,
 ): Promise<void> {
@@ -209,14 +222,14 @@ async function runAlertInvestigation(
         assistantName: ASSISTANT_NAME,
       },
       (proc, containerName) =>
-        deps.onProcess(chatJid, proc, containerName, group.folder),
+        deps.onProcess(queueJid, proc, containerName, group.folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.newSessionId) {
           deps.setSessions(group.folder, streamedOutput.newSessionId);
           setSession(group.folder, streamedOutput.newSessionId);
         }
         if (streamedOutput.status === 'success') {
-          deps.queue.notifyIdle(chatJid);
+          deps.queue.notifyIdle(queueJid);
         }
       },
     );

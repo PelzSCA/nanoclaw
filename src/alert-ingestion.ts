@@ -77,7 +77,10 @@ export function ingestAlert(
   // Store immediately (even if suppressed — for frequency tracking)
   insertAlert(alert);
   indexAlertFts(alert);
-  alertsIngestedTotal?.add(1, { source: alert.source, severity: String(alert.severity) });
+  alertsIngestedTotal?.add(1, {
+    source: alert.source,
+    severity: String(alert.severity),
+  });
 
   // Check suppression
   if (isAlertSuppressed(alert.fingerprint)) {
