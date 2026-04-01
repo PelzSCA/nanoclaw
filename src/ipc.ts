@@ -16,6 +16,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendCard?: (jid: string, card: object) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -691,23 +692,67 @@ export async function processTaskIpc(
       // Determine the config flag for approval instructions
       const configFlag = `"${tool === 'scheduled_tasks' ? 'scheduledTasks' : tool}Access": true`;
 
-      const message = [
-        `**Tool Access Request**`,
-        ``,
-        `**Group:** ${groupName}`,
-        `**Tool:** ${toolNames[tool] || tool}`,
-        `**Reason:** ${reason}`,
+      const membersText =
         participants.length > 0
-          ? `**Members:** ${participants.join(', ')}`
-          : `**Members:** _(no recent activity)_`,
-        ``,
-        `To approve, re-register the group with the flag enabled:`,
-        '```',
-        `register_group with jid="${requestChatJid}" and containerConfig: { ${configFlag} }`,
-        '```',
-      ].join('\n');
+          ? participants.join(', ')
+          : '(no recent activity)';
 
-      await deps.sendMessage(mainJid, message);
+      if (deps.sendCard && mainJid.startsWith('teams:')) {
+        const card = {
+          $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+          type: 'AdaptiveCard',
+          version: '1.4',
+          body: [
+            {
+              type: 'TextBlock',
+              text: 'Tool Access Request',
+              weight: 'Bolder',
+              size: 'Large',
+            },
+            {
+              type: 'FactSet',
+              facts: [
+                { title: 'Group', value: groupName },
+                { title: 'Tool', value: toolNames[tool] || tool },
+                { title: 'Reason', value: reason },
+                { title: 'Members', value: membersText },
+              ],
+            },
+          ],
+          actions: [
+            {
+              type: 'Action.Execute',
+              title: 'Approve',
+              verb: 'approve_tool_access',
+              data: { requestJid: requestChatJid, tool },
+            },
+            {
+              type: 'Action.Execute',
+              title: 'Deny',
+              verb: 'deny_tool_access',
+              data: { requestJid: requestChatJid, tool },
+            },
+          ],
+        };
+        await deps.sendCard(mainJid, card);
+      } else {
+        const message = [
+          `**Tool Access Request**`,
+          ``,
+          `**Group:** ${groupName}`,
+          `**Tool:** ${toolNames[tool] || tool}`,
+          `**Reason:** ${reason}`,
+          participants.length > 0
+            ? `**Members:** ${participants.join(', ')}`
+            : `**Members:** _(no recent activity)_`,
+          ``,
+          `To approve, re-register the group with the flag enabled:`,
+          '```',
+          `register_group with jid="${requestChatJid}" and containerConfig: { ${configFlag} }`,
+          '```',
+        ].join('\n');
+        await deps.sendMessage(mainJid, message);
+      }
       logger.info(
         { tool, groupName, sourceGroup, mainJid },
         'Tool access request forwarded to main group',

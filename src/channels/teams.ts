@@ -198,6 +198,59 @@ export class TeamsChannel implements Channel {
     this.conversationRefs.set(jid, ref);
     saveConversationReference(jid, 'teams', ref as Record<string, unknown>);
 
+    if (activity.type === 'invoke' && activity.name === 'adaptiveCard/action') {
+      const actionVerb = (activity.value as any)?.action?.verb as
+        | string
+        | undefined;
+      const actionData = (activity.value as any)?.action?.data as
+        | Record<string, string>
+        | undefined;
+
+      if (
+        actionVerb === 'approve_tool_access' &&
+        actionData?.requestJid &&
+        actionData?.tool
+      ) {
+        const { requestJid, tool } = actionData;
+        const groups = this.opts.registeredGroups();
+        const group = groups[requestJid];
+        if (group) {
+          const updated: RegisteredGroup = {
+            ...group,
+            containerConfig: {
+              ...(group.containerConfig ?? {}),
+              [`${tool}Access`]: true,
+            } as RegisteredGroup['containerConfig'],
+          };
+          this.opts.registerGroup(requestJid, updated);
+          logger.info(
+            { requestJid, tool, group: group.name },
+            'Tool access approved via card',
+          );
+          await context.sendActivity(
+            `Access approved: ${group.name} now has ${tool} CLI access.`,
+          );
+        } else {
+          await context.sendActivity(
+            `Could not find registered group for this request.`,
+          );
+        }
+      } else if (actionVerb === 'deny_tool_access') {
+        const groupName = actionData?.requestJid
+          ? (this.opts.registeredGroups()[actionData.requestJid]?.name ??
+            actionData.requestJid)
+          : 'unknown';
+        await context.sendActivity(`Access request denied for ${groupName}.`);
+      }
+
+      // Respond to the invoke so Teams clears the card's loading state
+      await context.sendActivity({
+        type: 'invokeResponse',
+        value: { status: 200 },
+      } as Activity);
+      return;
+    }
+
     if (activity.type === 'message' && activity.text) {
       const botMentioned = isBotMentioned(activity, this.appId);
 
@@ -352,6 +405,33 @@ export class TeamsChannel implements Channel {
     for (const ch of jid) hash = ((hash << 5) - hash + ch.charCodeAt(0)) | 0;
     const suffix = Math.abs(hash).toString(36).slice(0, 6);
     return `${prefix}-${suffix}`;
+  }
+
+  async sendCard(jid: string, card: object): Promise<void> {
+    const ref = this.conversationRefs.get(jid);
+    if (!ref) {
+      logger.warn(
+        { jid },
+        'No conversation reference for JID — cannot send card',
+      );
+      return;
+    }
+    await this.adapter.continueConversationAsync(
+      this.appId,
+      ref as ConversationReference,
+      async (context) => {
+        await context.sendActivity({
+          type: 'message',
+          attachments: [
+            {
+              contentType: 'application/vnd.microsoft.card.adaptive',
+              content: card,
+            },
+          ],
+        } as Activity);
+      },
+    );
+    logger.info({ jid }, 'Teams adaptive card sent');
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {

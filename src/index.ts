@@ -658,6 +658,11 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
     },
+    sendCard: (jid, card) => {
+      const channel = findChannel(channels, jid);
+      if (!channel?.sendCard) return Promise.resolve();
+      return channel.sendCard(jid, card);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
