@@ -8,7 +8,13 @@ import { randomUUID } from 'crypto';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup, loadGithubAppToken } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import { createSubscription, deleteSubscription } from './alert-db.js';
+import {
+  createSubscription,
+  deleteSubscription,
+  getAlertsByFingerprint,
+  getRecentAlerts,
+  searchAlertsFts,
+} from './alert-db.js';
 import { handleInvestigationComplete } from './alert-processor.js';
 import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -757,6 +763,30 @@ export async function processTaskIpc(
         { tool, groupName, sourceGroup, mainJid },
         'Tool access request forwarded to main group',
       );
+      break;
+    }
+
+    case 'alert_history_query': {
+      const hours = typeof data.hours === 'number' ? data.hours : 24;
+      const limit = typeof data.limit === 'number' ? data.limit : 20;
+      const query = data.query as string | undefined;
+      const fingerprint = data.fingerprint as string | undefined;
+
+      let alerts;
+      if (fingerprint) {
+        alerts = getAlertsByFingerprint(fingerprint, limit);
+      } else if (query) {
+        alerts = searchAlertsFts(query, limit);
+      } else {
+        const since = new Date(Date.now() - hours * 3600000).toISOString();
+        alerts = getRecentAlerts(since, limit);
+      }
+
+      const resultPath = path.join(DATA_DIR, 'ipc', sourceGroup, 'alert_history_result.json');
+      const tempPath = `${resultPath}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify({ alerts, count: alerts.length, queriedAt: new Date().toISOString() }));
+      fs.renameSync(tempPath, resultPath);
+      logger.info({ sourceGroup, count: alerts.length, fingerprint, query, hours }, 'Alert history query processed');
       break;
     }
 
