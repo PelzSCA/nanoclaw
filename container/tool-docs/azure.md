@@ -28,3 +28,27 @@ az resource list --resource-group my-rg -o table
 # Combine filters
 az resource list --query "[?contains(name, 'search') && type=='Microsoft.Web/sites']" -o table
 ```
+
+## Azure DevOps (`az devops`)
+
+You have access to the `az devops` extension, authenticated via the same service principal (no PAT needed). Always pass `--org <url>` to every command.
+
+```bash
+# List projects
+az devops project list --org https://dev.azure.com/myorg -o table
+
+# List pipelines in a project
+az pipelines list --org https://dev.azure.com/myorg --project "MyProject" -o table
+
+# List recent pipeline runs
+az pipelines runs list --org https://dev.azure.com/myorg --project "MyProject" --pipeline-id 123 -o table
+
+# Get a specific build result
+az pipelines build show --org https://dev.azure.com/myorg --project "MyProject" --id 456 -o table
+
+# List releases
+az pipelines release list --org https://dev.azure.com/myorg --project "MyProject" -o table
+
+# Get release details
+az pipelines release show --org https://dev.azure.com/myorg --project "MyProject" --id 789 -o table
+```
