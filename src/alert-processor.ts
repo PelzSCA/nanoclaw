@@ -343,6 +343,10 @@ ${k.knowledge.slice(-2000)}`,
 
 2. **Investigate root cause**: Use available tools:
    - \`az\` CLI for Azure resource status, metrics, logs, activity log
+   - \`az devops\` / \`az pipelines\` / \`az repos\` for Azure DevOps — use when the alert points to application code, a failed deployment, or a regression. Always pass \`--org https://dev.azure.com/southerncrossaustereo\`. Examples:
+     - \`az pipelines runs list --org ... --project "MyProject" --pipeline-id 123 -o table\` — recent pipeline runs
+     - \`az repos list --org ... --project "MyProject" -o table\` — list repositories
+     - \`az devops invoke --area git --resource items --route-parameters project=MyProject repositoryId=MyRepo --query-parameters "path=/src/MyFile.cs&versionDescriptor.version=main"\` — fetch a source file
    - \`atlassian-api\` for Jira/Confluence — search for known issues, runbooks, past incidents
      - \`atlassian-api jira-search "project = OPS AND status = Open"\`
      - \`atlassian-api confluence-search "runbook error message"\`
