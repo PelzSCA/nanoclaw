@@ -30,8 +30,9 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Azure CLI
-RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+# Install Azure CLI and Azure DevOps extension
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
+    && az extension add --name azure-devops --allow-preview true 2>&1 | tail -1
 
 # Install kubectl
 RUN curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg \
@@ -101,6 +102,9 @@ if [ -n "${AZURE_CLIENT_ID:-}" ] && [ -n "${AZURE_CLIENT_SECRET:-}" ] && [ -n "$
     -p "$AZURE_CLIENT_SECRET" \
     -t "$AZURE_TENANT_ID" \
     --output none 2>&1 >&2 && echo "Azure: authenticated as service principal" >&2 || echo "Azure: login failed" >&2
+  AZURE_DEVOPS_EXT_PAT=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) \
+    && export AZURE_DEVOPS_EXT_PAT && echo "Azure DevOps: token acquired" >&2 \
+    || echo "Azure DevOps: could not acquire DevOps token" >&2
 fi
 
 # Authenticate Atlassian CLI if credentials are provided.
