@@ -30,9 +30,15 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Azure CLI and Azure DevOps extension
+# Install Azure CLI and required extensions
+# AZURE_EXTENSION_DIR is set to a world-readable path so the node user can use them
+ENV AZURE_EXTENSION_DIR=/opt/az-extensions
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
-    && az extension add --name azure-devops --allow-preview true 2>&1 | tail -1
+    && mkdir -p /opt/az-extensions \
+    && az config set extension.dynamic_install_allow_preview=true \
+    && az extension add --name azure-devops --allow-preview true \
+    && az extension add --name log-analytics --allow-preview true \
+    && chmod -R a+rX /opt/az-extensions
 
 # Install kubectl
 RUN curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg \
